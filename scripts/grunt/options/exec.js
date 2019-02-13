@@ -19,6 +19,6 @@ module.exports = function (config, grunt) {
       src: ['public/app/**/*.ts*'],
     },
     jest: 'node ./node_modules/jest-cli/bin/jest.js --maxWorkers 2',
-    webpack: 'node ./node_modules/webpack/bin/webpack.js --config scripts/webpack/webpack.prod.js',
+    webpack: 'node --max_old_space_size=8000 ./node_modules/webpack/bin/webpack.js --config scripts/webpack/webpack.prod.js',
   };
 };
