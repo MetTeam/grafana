@@ -1,8 +1,8 @@
 import * as d3 from 'd3';
 import $ from 'jquery';
-import _ from 'lodash';
-import kbn from 'app/core/utils/kbn';
+import { filter, find, isNumber, map, reduce } from 'lodash';
 import { getValueBucketBound } from './heatmap_data_converter';
+import { getValueFormat, formattedValueToString } from '@grafana/data';
 
 const TOOLTIP_PADDING_X = 30;
 const TOOLTIP_PADDING_Y = 5;
@@ -19,7 +19,7 @@ export class HeatmapTooltip {
   mouseOverBucket: boolean;
   originalFillColor: any;
 
-  constructor(elem, scope) {
+  constructor(elem: JQuery, scope: any) {
     this.scope = scope;
     this.dashboard = scope.ctrl.dashboard;
     this.panelCtrl = scope.ctrl;
@@ -35,7 +35,7 @@ export class HeatmapTooltip {
     this.destroy();
   }
 
-  onMouseMove(e) {
+  onMouseMove(e: any) {
     if (!this.panel.tooltip.show) {
       return;
     }
@@ -44,10 +44,7 @@ export class HeatmapTooltip {
   }
 
   add() {
-    this.tooltip = d3
-      .select('body')
-      .append('div')
-      .attr('class', 'heatmap-tooltip graph-tooltip grafana-tooltip');
+    this.tooltip = d3.select('body').append('div').attr('class', 'heatmap-tooltip graph-tooltip grafana-tooltip');
   }
 
   destroy() {
@@ -58,7 +55,7 @@ export class HeatmapTooltip {
     this.tooltip = null;
   }
 
-  show(pos, data) {
+  show(pos: { panelRelY: any }, data: any) {
     if (!this.panel.tooltip.show || !data) {
       return;
     }
@@ -81,7 +78,7 @@ export class HeatmapTooltip {
     let boundBottom, boundTop, valuesNumber;
     const xData = data.buckets[xBucketIndex];
     // Search in special 'zero' bucket also
-    const yData = _.find(xData.buckets, (bucket, bucketIndex) => {
+    const yData: any = find(xData.buckets, (bucket, bucketIndex) => {
       return bucket.bounds.bottom === yBucketIndex || bucketIndex === yBucketIndex.toString();
     });
 
@@ -90,7 +87,7 @@ export class HeatmapTooltip {
 
     // Decimals override. Code from panel/graph/graph.ts
     let countValueFormatter, bucketBoundFormatter;
-    if (_.isNumber(this.panel.tooltipDecimals)) {
+    if (isNumber(this.panel.tooltipDecimals)) {
       countValueFormatter = this.countValueFormatter(this.panel.tooltipDecimals, null);
       bucketBoundFormatter = this.panelCtrl.tickValueFormatter(this.panelCtrl.decimals, null);
     } else {
@@ -109,12 +106,14 @@ export class HeatmapTooltip {
       if (yData.bounds) {
         if (data.tsBuckets) {
           // Use Y-axis labels
-          const tickFormatter = valIndex => {
+          const tickFormatter = (valIndex: string | number) => {
             return data.tsBucketsFormatted ? data.tsBucketsFormatted[valIndex] : data.tsBuckets[valIndex];
           };
 
           boundBottom = tickFormatter(yBucketIndex);
-          boundTop = yBucketIndex < data.tsBuckets.length - 1 ? tickFormatter(yBucketIndex + 1) : '';
+          if (this.panel.yBucketBound !== 'middle') {
+            boundTop = yBucketIndex < data.tsBuckets.length - 1 ? tickFormatter(yBucketIndex + 1) : '';
+          }
         } else {
           // Display 0 if bucket is a special 'zero' bucket
           const bottom = yData.y ? yData.bounds.bottom : 0;
@@ -122,8 +121,9 @@ export class HeatmapTooltip {
           boundTop = bucketBoundFormatter(yData.bounds.top);
         }
         valuesNumber = countValueFormatter(yData.count);
+        const boundStr = boundTop && boundBottom ? `${boundBottom} - ${boundTop}` : boundBottom || boundTop;
         tooltipHtml += `<div>
-          bucket: <b>${boundBottom} - ${boundTop}</b> <br>
+          bucket: <b>${boundStr}</b> <br>
           count: <b>${valuesNumber}</b> <br>
         </div>`;
       } else {
@@ -149,22 +149,22 @@ export class HeatmapTooltip {
     this.move(pos);
   }
 
-  getBucketIndexes(pos, data) {
+  getBucketIndexes(pos: { panelRelY?: any; x?: any; y?: any }, data: any) {
     const xBucketIndex = this.getXBucketIndex(pos.x, data);
     const yBucketIndex = this.getYBucketIndex(pos.y, data);
     return { xBucketIndex, yBucketIndex };
   }
 
-  getXBucketIndex(x, data) {
+  getXBucketIndex(x: number, data: { buckets: any; xBucketSize: number }) {
     // First try to find X bucket by checking x pos is in the
     // [bucket.x, bucket.x + xBucketSize] interval
-    const xBucket = _.find(data.buckets, bucket => {
+    const xBucket: any = find(data.buckets, (bucket) => {
       return x > bucket.x && x - bucket.x <= data.xBucketSize;
     });
     return xBucket ? xBucket.x : getValueBucketBound(x, data.xBucketSize, 1);
   }
 
-  getYBucketIndex(y, data) {
+  getYBucketIndex(y: number, data: { tsBuckets: any; yBucketSize: number }) {
     if (data.tsBuckets) {
       return Math.floor(y);
     }
@@ -172,17 +172,17 @@ export class HeatmapTooltip {
     return yBucketIndex;
   }
 
-  getSharedTooltipPos(pos) {
+  getSharedTooltipPos(pos: { pageX: any; x: any; pageY: any; panelRelY: number }) {
     // get pageX from position on x axis and pageY from relative position in original panel
     pos.pageX = this.heatmapPanel.offset().left + this.scope.xScale(pos.x);
     pos.pageY = this.heatmapPanel.offset().top + this.scope.chartHeight * pos.panelRelY;
     return pos;
   }
 
-  addHistogram(data) {
+  addHistogram(data: { x: string | number }) {
     const xBucket = this.scope.ctrl.data.buckets[data.x];
     const yBucketSize = this.scope.ctrl.data.yBucketSize;
-    let min, max, ticks;
+    let min: number, max: number, ticks: number;
     if (this.scope.ctrl.data.tsBuckets) {
       min = 0;
       max = this.scope.ctrl.data.tsBuckets.length - 1;
@@ -192,32 +192,33 @@ export class HeatmapTooltip {
       max = this.scope.ctrl.data.yAxis.max;
       ticks = this.scope.ctrl.data.yAxis.ticks;
     }
-    let histogramData = _.map(xBucket.buckets, bucket => {
+    let histogramData = map(xBucket.buckets, (bucket) => {
       const count = bucket.count !== undefined ? bucket.count : bucket.values.length;
       return [bucket.bounds.bottom, count];
     });
-    histogramData = _.filter(histogramData, d => {
+    histogramData = filter(histogramData, (d) => {
       return d[0] >= min && d[0] <= max;
     });
 
     const scale = this.scope.yScale.copy();
     const histXScale = scale.domain([min, max]).range([0, HISTOGRAM_WIDTH]);
 
-    let barWidth;
+    let barWidth: number;
     if (this.panel.yAxis.logBase === 1) {
-      barWidth = Math.floor(HISTOGRAM_WIDTH / (max - min) * yBucketSize * 0.9);
+      barWidth = Math.floor((HISTOGRAM_WIDTH / (max - min)) * yBucketSize * 0.9);
     } else {
       const barNumberFactor = yBucketSize ? yBucketSize : 1;
-      barWidth = Math.floor(HISTOGRAM_WIDTH / ticks / barNumberFactor * 0.9);
+      barWidth = Math.floor((HISTOGRAM_WIDTH / ticks / barNumberFactor) * 0.9);
     }
     barWidth = Math.max(barWidth, 1);
 
     // Normalize histogram Y axis
-    const histogramDomain = _.reduce(_.map(histogramData, d => d[1]), (sum, val) => sum + val, 0);
-    const histYScale = d3
-      .scaleLinear()
-      .domain([0, histogramDomain])
-      .range([0, HISTOGRAM_HEIGHT]);
+    const histogramDomain = reduce(
+      map(histogramData, (d) => d[1]),
+      (sum, val) => sum + val,
+      0
+    );
+    const histYScale = d3.scaleLinear().domain([0, histogramDomain]).range([0, HISTOGRAM_HEIGHT]);
 
     const histogram = this.tooltip
       .select('.heatmap-histogram')
@@ -230,19 +231,19 @@ export class HeatmapTooltip {
       .data(histogramData)
       .enter()
       .append('rect')
-      .attr('x', d => {
+      .attr('x', (d: any[]) => {
         return histXScale(d[0]);
       })
       .attr('width', barWidth)
-      .attr('y', d => {
+      .attr('y', (d: any[]) => {
         return HISTOGRAM_HEIGHT - histYScale(d[1]);
       })
-      .attr('height', d => {
+      .attr('height', (d: any[]) => {
         return histYScale(d[1]);
       });
   }
 
-  move(pos) {
+  move(pos: { panelRelY?: any; pageX?: any; pageY?: any }) {
     if (!this.tooltip) {
       return;
     }
@@ -265,10 +266,10 @@ export class HeatmapTooltip {
     return this.tooltip.style('left', left + 'px').style('top', top + 'px');
   }
 
-  countValueFormatter(decimals, scaledDecimals = null) {
-    const format = 'short';
-    return value => {
-      return kbn.valueFormats[format](value, decimals, scaledDecimals);
+  countValueFormatter(decimals: number, scaledDecimals: any = null) {
+    const fmt = getValueFormat('short');
+    return (value: number) => {
+      return formattedValueToString(fmt(value, decimals, scaledDecimals));
     };
   }
 }

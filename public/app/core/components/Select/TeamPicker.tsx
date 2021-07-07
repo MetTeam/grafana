@@ -1,8 +1,7 @@
 import React, { Component } from 'react';
-import _ from 'lodash';
-import { AsyncSelect } from './Select';
-import { debounce } from 'lodash';
-import { getBackendSrv } from 'app/core/services/backend_srv';
+import { debounce, isNil } from 'lodash';
+import { AsyncSelect } from '@grafana/ui';
+import { getBackendSrv } from '@grafana/runtime';
 
 export interface Team {
   id: number;
@@ -23,7 +22,7 @@ export interface State {
 export class TeamPicker extends Component<Props, State> {
   debouncedSearch: any;
 
-  constructor(props) {
+  constructor(props: Props) {
     super(props);
     this.state = { isLoading: false };
     this.search = this.search.bind(this);
@@ -35,34 +34,35 @@ export class TeamPicker extends Component<Props, State> {
   }
 
   search(query?: string) {
-    const backendSrv = getBackendSrv();
     this.setState({ isLoading: true });
 
-    if (_.isNil(query)) {
+    if (isNil(query)) {
       query = '';
     }
 
-    return backendSrv.get(`/api/teams/search?perpage=10&page=1&query=${query}`).then(result => {
-      const teams = result.teams.map(team => {
-        return {
-          id: team.id,
-          value: team.id,
-          label: team.name,
-          name: team.name,
-          imgUrl: team.avatarUrl,
-        };
-      });
+    return getBackendSrv()
+      .get(`/api/teams/search?perpage=100&page=1&query=${query}`)
+      .then((result: any) => {
+        const teams = result.teams.map((team: any) => {
+          return {
+            id: team.id,
+            value: team.id,
+            label: team.name,
+            name: team.name,
+            imgUrl: team.avatarUrl,
+          };
+        });
 
-      this.setState({ isLoading: false });
-      return teams;
-    });
+        this.setState({ isLoading: false });
+        return teams;
+      });
   }
 
   render() {
     const { onSelected, className } = this.props;
     const { isLoading } = this.state;
     return (
-      <div className="user-picker">
+      <div className="user-picker" data-testid="teamPicker">
         <AsyncSelect
           isLoading={isLoading}
           defaultOptions={true}
@@ -70,7 +70,7 @@ export class TeamPicker extends Component<Props, State> {
           onChange={onSelected}
           className={className}
           placeholder="Select a team"
-          noOptionsMessage={() => 'No teams found'}
+          noOptionsMessage="No teams found"
         />
       </div>
     );

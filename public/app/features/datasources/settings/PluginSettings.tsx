@@ -1,47 +1,65 @@
 import React, { PureComponent } from 'react';
-import _ from 'lodash';
-import { DataSource, Plugin } from 'app/types/';
-import { getAngularLoader, AngularComponent } from 'app/core/services/AngularLoader';
+import { cloneDeep } from 'lodash';
+import {
+  DataQuery,
+  DataSourceApi,
+  DataSourceJsonData,
+  DataSourcePlugin,
+  DataSourcePluginMeta,
+  DataSourceSettings,
+} from '@grafana/data';
+import { AngularComponent, getAngularLoader } from '@grafana/runtime';
+
+export type GenericDataSourcePlugin = DataSourcePlugin<DataSourceApi<DataQuery, DataSourceJsonData>>;
 
 export interface Props {
-  dataSource: DataSource;
-  dataSourceMeta: Plugin;
-  onModelChange: (dataSource: DataSource) => void;
+  plugin: GenericDataSourcePlugin;
+  dataSource: DataSourceSettings;
+  dataSourceMeta: DataSourcePluginMeta;
+  onModelChange: (dataSource: DataSourceSettings) => void;
 }
 
 export class PluginSettings extends PureComponent<Props> {
-  element: any;
-  component: AngularComponent;
+  element: HTMLDivElement | null = null;
+  component?: AngularComponent;
   scopeProps: {
-    ctrl: { datasourceMeta: Plugin; current: DataSource };
-    onModelChanged: (dataSource: DataSource) => void;
+    ctrl: { datasourceMeta: DataSourcePluginMeta; current: DataSourceSettings };
+    onModelChanged: (dataSource: DataSourceSettings) => void;
   };
 
-  constructor(props) {
+  constructor(props: Props) {
     super(props);
 
     this.scopeProps = {
-      ctrl: { datasourceMeta: props.dataSourceMeta, current: _.cloneDeep(props.dataSource) },
+      ctrl: { datasourceMeta: props.dataSourceMeta, current: cloneDeep(props.dataSource) },
       onModelChanged: this.onModelChanged,
     };
+    this.onModelChanged = this.onModelChanged.bind(this);
   }
 
   componentDidMount() {
+    const { plugin } = this.props;
+
     if (!this.element) {
       return;
     }
 
-    const loader = getAngularLoader();
-    const template = '<plugin-component type="datasource-config-ctrl" />';
+    if (!plugin.components.ConfigEditor) {
+      // React editor is not specified, let's render angular editor
+      // How to approach this better? Introduce ReactDataSourcePlugin interface and typeguard it here?
+      const loader = getAngularLoader();
+      const template = '<plugin-component type="datasource-config-ctrl" />';
 
-    this.component = loader.load(this.element, this.scopeProps, template);
+      this.component = loader.load(this.element, this.scopeProps, template);
+    }
   }
 
-  componentDidUpdate(prevProps) {
-    if (this.props.dataSource !== prevProps.dataSource) {
-      this.scopeProps.ctrl.current = _.cloneDeep(this.props.dataSource);
+  componentDidUpdate(prevProps: Props) {
+    const { plugin } = this.props;
+    if (!plugin.components.ConfigEditor && this.props.dataSource !== prevProps.dataSource) {
+      this.scopeProps.ctrl.current = cloneDeep(this.props.dataSource);
 
-      this.component.digest();
+      this.component?.digest();
     }
   }
 
@@ -51,12 +69,26 @@ export class PluginSettings extends PureComponent<Props> {
     }
   }
 
-  onModelChanged = (dataSource: DataSource) => {
+  onModelChanged = (dataSource: DataSourceSettings) => {
     this.props.onModelChange(dataSource);
   };
 
   render() {
-    return <div ref={element => (this.element = element)} />;
+    const { plugin, dataSource } = this.props;
+
+    if (!plugin) {
+      return null;
+    }
+
+    return (
+      <div ref={(element) => (this.element = element)}>
+        {plugin.components.ConfigEditor &&
+          React.createElement(plugin.components.ConfigEditor, {
+            options: dataSource,
+            onOptionsChange: this.onModelChanged,
+          })}
+      </div>
+    );
   }
 }
 

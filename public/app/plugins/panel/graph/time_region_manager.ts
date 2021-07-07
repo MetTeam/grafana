@@ -1,9 +1,14 @@
 import 'vendor/flot/jquery.flot';
-import _ from 'lodash';
-import moment from 'moment';
-import config from 'app/core/config';
+import { map } from 'lodash';
+import { getColorForTheme, dateTime, DateTime, AbsoluteTimeRange, GrafanaTheme } from '@grafana/data';
+import { config } from 'app/core/config';
 
-export const colorModes = {
+type TimeRegionColorDefinition = {
+  fill: string | null;
+  line: string | null;
+};
+
+export const colorModes: any = {
   gray: {
     themeDependent: true,
     title: 'Gray',
@@ -30,55 +35,68 @@ export const colorModes = {
 };
 
 export function getColorModes() {
-  return _.map(Object.keys(colorModes), key => {
+  return map(Object.keys(colorModes), (key) => {
     return {
-      key: key,
+      key,
       value: colorModes[key].title,
     };
   });
 }
 
-function getColor(timeRegion) {
+function getColor(timeRegion: any, theme: GrafanaTheme): TimeRegionColorDefinition {
   if (Object.keys(colorModes).indexOf(timeRegion.colorMode) === -1) {
     timeRegion.colorMode = 'red';
   }
 
   if (timeRegion.colorMode === 'custom') {
     return {
-      fill: timeRegion.fillColor,
-      line: timeRegion.lineColor,
+      fill: timeRegion.fill && timeRegion.fillColor ? getColorForTheme(timeRegion.fillColor, theme) : null,
+      line: timeRegion.line && timeRegion.lineColor ? getColorForTheme(timeRegion.lineColor, theme) : null,
     };
   }
 
   const colorMode = colorModes[timeRegion.colorMode];
+
   if (colorMode.themeDependent === true) {
-    return config.bootData.user.lightTheme ? colorMode.lightColor : colorMode.darkColor;
+    return theme.isLight ? colorMode.lightColor : colorMode.darkColor;
   }
 
-  return colorMode.color;
+  return {
+    fill: timeRegion.fill ? getColorForTheme(colorMode.color.fill, theme) : null,
+    line: timeRegion.fill ? getColorForTheme(colorMode.color.line, theme) : null,
+  };
 }
 
 export class TimeRegionManager {
   plot: any;
   timeRegions: any;
 
-  constructor(private panelCtrl) {}
+  constructor(private panelCtrl: any) {}
 
-  draw(plot) {
+  draw(plot: any) {
     this.timeRegions = this.panelCtrl.panel.timeRegions;
     this.plot = plot;
   }
 
-  addFlotOptions(options, panel) {
+  addFlotOptions(options: any, panel: any) {
     if (!panel.timeRegions || panel.timeRegions.length === 0) {
       return;
     }
 
-    const tRange = { from: moment(this.panelCtrl.range.from).utc(), to: moment(this.panelCtrl.range.to).utc() };
+    const tRange = {
+      from: dateTime(this.panelCtrl.range.from).utc(),
+      to: dateTime(this.panelCtrl.range.to).utc(),
+    };
 
-    let i, hRange, timeRegion, regions, fromStart, fromEnd, timeRegionColor;
+    let i: number,
+      hRange: { from: any; to: any },
+      timeRegion: any,
+      regions: AbsoluteTimeRange[],
+      fromStart: DateTime,
+      fromEnd: DateTime,
+      timeRegionColor: TimeRegionColorDefinition;
 
-    const timeRegionsCopy = panel.timeRegions.map(a => ({ ...a }));
+    const timeRegionsCopy = panel.timeRegions.map((a: any) => ({ ...a }));
 
     for (i = 0; i < timeRegionsCopy.length; i++) {
       timeRegion = timeRegionsCopy[i];
@@ -134,44 +152,31 @@ export class TimeRegionManager {
 
       regions = [];
 
-      if (
-        hRange.from.h >= tRange.from.hour() &&
-        hRange.from.h <= tRange.from.hour() &&
-        hRange.from.m >= tRange.from.minute() &&
-        hRange.from.m <= tRange.from.minute() &&
-        hRange.to.h >= tRange.to.hour() &&
-        hRange.to.h <= tRange.to.hour() &&
-        hRange.to.m >= tRange.to.minute() &&
-        hRange.to.m <= tRange.to.minute()
-      ) {
-        regions.push({ from: tRange.from.valueOf(), to: tRange.to.startOf('hour').valueOf() });
-      } else {
-        fromStart = moment(tRange.from);
-        fromStart.set('hour', 0);
-        fromStart.set('minute', 0);
-        fromStart.set('second', 0);
-        fromStart.add(hRange.from.h, 'hours');
-        fromStart.add(hRange.from.m, 'minutes');
-        fromStart.add(hRange.from.s, 'seconds');
+      fromStart = dateTime(tRange.from);
+      fromStart.set('hour', 0);
+      fromStart.set('minute', 0);
+      fromStart.set('second', 0);
+      fromStart.add(hRange.from.h, 'hours');
+      fromStart.add(hRange.from.m, 'minutes');
+      fromStart.add(hRange.from.s, 'seconds');
 
-        while (fromStart.unix() <= tRange.to.unix()) {
-          while (hRange.from.dayOfWeek && hRange.from.dayOfWeek !== fromStart.isoWeekday()) {
-            fromStart.add(24, 'hours');
-          }
+      while (fromStart.unix() <= tRange.to.unix()) {
+        while (hRange.from.dayOfWeek && hRange.from.dayOfWeek !== fromStart.isoWeekday()) {
+          fromStart.add(24, 'hours');
+        }
 
-          if (fromStart.unix() > tRange.to.unix()) {
-            break;
-          }
+        if (fromStart.unix() > tRange.to.unix()) {
+          break;
+        }
 
-          fromEnd = moment(fromStart);
+        fromEnd = dateTime(fromStart);
 
+        if (fromEnd.hour) {
           if (hRange.from.h <= hRange.to.h) {
             fromEnd.add(hRange.to.h - hRange.from.h, 'hours');
-          } else if (hRange.from.h + hRange.to.h < 23) {
-            fromEnd.add(hRange.to.h, 'hours');
-
+          } else if (hRange.from.h > hRange.to.h) {
             while (fromEnd.hour() !== hRange.to.h) {
-              fromEnd.add(-1, 'hours');
+              fromEnd.add(1, 'hours');
             }
           } else {
             fromEnd.add(24 - hRange.from.h, 'hours');
@@ -180,27 +185,27 @@ export class TimeRegionManager {
               fromEnd.add(1, 'hours');
             }
           }
-
-          fromEnd.set('minute', hRange.to.m);
-          fromEnd.set('second', hRange.to.s);
-
-          while (hRange.to.dayOfWeek && hRange.to.dayOfWeek !== fromEnd.isoWeekday()) {
-            fromEnd.add(24, 'hours');
-          }
-
-          const outsideRange =
-            (fromStart.unix() < tRange.from.unix() && fromEnd.unix() < tRange.from.unix()) ||
-            (fromStart.unix() > tRange.to.unix() && fromEnd.unix() > tRange.to.unix());
-
-          if (!outsideRange) {
-            regions.push({ from: fromStart.valueOf(), to: fromEnd.valueOf() });
-          }
-
-          fromStart.add(24, 'hours');
         }
+
+        fromEnd.set('minute', hRange.to.m);
+        fromEnd.set('second', hRange.to.s);
+
+        while (hRange.to.dayOfWeek && hRange.to.dayOfWeek !== fromEnd.isoWeekday()) {
+          fromEnd.add(24, 'hours');
+        }
+
+        const outsideRange =
+          (fromStart.unix() < tRange.from.unix() && fromEnd.unix() < tRange.from.unix()) ||
+          (fromStart.unix() > tRange.to.unix() && fromEnd.unix() > tRange.to.unix());
+
+        if (!outsideRange) {
+          regions.push({ from: fromStart.valueOf(), to: fromEnd.valueOf() });
+        }
+
+        fromStart.add(24, 'hours');
       }
 
-      timeRegionColor = getColor(timeRegion);
+      timeRegionColor = getColor(timeRegion, config.theme);
 
       for (let j = 0; j < regions.length; j++) {
         const r = regions[j];
@@ -225,9 +230,9 @@ export class TimeRegionManager {
     }
   }
 
-  parseTimeRange(str) {
+  parseTimeRange(str: string) {
     const timeRegex = /^([\d]+):?(\d{2})?/;
-    const result = { h: null, m: null };
+    const result: any = { h: null, m: null };
     const match = timeRegex.exec(str);
 
     if (!match) {

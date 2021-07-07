@@ -1,20 +1,42 @@
 import React from 'react';
 import { shallow } from 'enzyme';
-import { TeamPages, Props } from './TeamPages';
-import { NavModel, Team } from '../../types';
+import { Props, TeamPages } from './TeamPages';
+import { OrgRole, Team, TeamMember } from '../../types';
 import { getMockTeam } from './__mocks__/teamMocks';
+import { User } from 'app/core/services/context_srv';
+import { NavModel } from '@grafana/data';
+import { getRouteComponentProps } from 'app/core/navigation/__mocks__/routeProps';
 
 jest.mock('app/core/config', () => ({
-  buildInfo: { isEnterprise: true },
+  ...((jest.requireActual('app/core/config') as unknown) as object),
+  licenseInfo: {
+    hasLicense: true,
+  },
 }));
 
 const setup = (propOverrides?: object) => {
   const props: Props = {
+    ...getRouteComponentProps({
+      match: {
+        params: {
+          id: '1',
+          page: null,
+        },
+      } as any,
+    }),
     navModel: {} as NavModel,
     teamId: 1,
     loadTeam: jest.fn(),
+    loadTeamMembers: jest.fn(),
     pageName: 'members',
     team: {} as Team,
+    members: [] as TeamMember[],
+    editorsCanAdmin: false,
+    signedInUser: {
+      id: 1,
+      isGrafanaAdmin: false,
+      orgRole: OrgRole.Viewer,
+    } as User,
   };
 
   Object.assign(props, propOverrides);
@@ -64,5 +86,47 @@ describe('Render', () => {
     });
 
     expect(wrapper).toMatchSnapshot();
+  });
+
+  describe('when feature toggle editorsCanAdmin is turned on', () => {
+    it('should render settings page if user is team admin', () => {
+      const { wrapper } = setup({
+        team: getMockTeam(),
+        pageName: 'settings',
+        preferences: {
+          homeDashboardId: 1,
+          theme: 'Default',
+          timezone: 'Default',
+        },
+        editorsCanAdmin: true,
+        signedInUser: {
+          id: 1,
+          isGrafanaAdmin: false,
+          orgRole: OrgRole.Admin,
+        } as User,
+      });
+
+      expect(wrapper).toMatchSnapshot();
+    });
+
+    it('should not render settings page if user is team member', () => {
+      const { wrapper } = setup({
+        team: getMockTeam(),
+        pageName: 'settings',
+        preferences: {
+          homeDashboardId: 1,
+          theme: 'Default',
+          timezone: 'Default',
+        },
+        editorsCanAdmin: true,
+        signedInUser: {
+          id: 1,
+          isGrafanaAdmin: false,
+          orgRole: OrgRole.Viewer,
+        } as User,
+      });
+
+      expect(wrapper).toMatchSnapshot();
+    });
   });
 });

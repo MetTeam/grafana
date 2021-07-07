@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/pkg/errors"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -14,20 +13,20 @@ import (
 
 type publisher struct {
 	apiKey         string
-	apiUri         string
+	apiURI         string
 	product        string
 	dryRun         bool
 	enterprise     bool
-	baseArchiveUrl string
+	baseArchiveURL string
 	builder        releaseBuilder
 }
 
 type releaseBuilder interface {
-	prepareRelease(baseArchiveUrl, whatsNewUrl string, releaseNotesUrl string, nightly bool) (*release, error)
+	prepareRelease(baseArchiveURL, whatsNewURL string, releaseNotesURL string, nightly bool) (*release, error)
 }
 
-func (p *publisher) doRelease(whatsNewUrl string, releaseNotesUrl string, nightly bool) error {
-	currentRelease, err := p.builder.prepareRelease(p.baseArchiveUrl, whatsNewUrl, releaseNotesUrl, nightly)
+func (p *publisher) doRelease(whatsNewURL string, releaseNotesURL string, nightly bool) error {
+	currentRelease, err := p.builder.prepareRelease(p.baseArchiveURL, whatsNewURL, releaseNotesURL, nightly)
 	if err != nil {
 		return err
 	}
@@ -62,45 +61,64 @@ func (p *publisher) postRelease(r *release) error {
 	return nil
 }
 
-type ReleaseType int
+type releaseType int
 
 const (
-	STABLE ReleaseType = iota + 1
+	// STABLE is a release type constant
+	STABLE releaseType = iota + 1
+	// BETA is a release type constant
 	BETA
+	// NIGHTLY is a release type constant
 	NIGHTLY
 )
 
-func (rt ReleaseType) beta() bool {
+func (rt releaseType) beta() bool {
 	return rt == BETA
 }
 
-func (rt ReleaseType) stable() bool {
+func (rt releaseType) stable() bool {
 	return rt == STABLE
 }
 
-func (rt ReleaseType) nightly() bool {
+func (rt releaseType) nightly() bool {
 	return rt == NIGHTLY
 }
 
 type buildArtifact struct {
-	os         string
-	arch       string
-	urlPostfix string
+	os             string
+	arch           string
+	urlPostfix     string
+	packagePostfix string
 }
 
-func (t buildArtifact) getUrl(baseArchiveUrl, version string, releaseType ReleaseType) string {
+func (t buildArtifact) getURL(baseArchiveURL, version string, releaseType releaseType) string {
 	prefix := "-"
-	rhelReleaseExtra := ""
+	rev := ""
 
 	if t.os == "deb" {
 		prefix = "_"
 	}
 
-	if releaseType.stable() && t.os == "rhel" {
-		rhelReleaseExtra = "-1"
+	if t.os == "rhel" {
+		rev = "-1"
 	}
 
-	url := strings.Join([]string{baseArchiveUrl, prefix, version, rhelReleaseExtra, t.urlPostfix}, "")
+	verComponents := strings.Split(version, "-")
+	if len(verComponents) > 2 {
+		panic(fmt.Sprintf("Version string contains more than one hyphen: %q", version))
+	}
+
+	switch t.os {
+	case "deb", "rhel":
+		if len(verComponents) > 1 {
+			// With Debian and RPM packages, it's customary to prefix any pre-release component with a ~, since this
+			// is considered of lower lexical value than the empty character, and this way pre-release versions are
+			// considered to be of a lower version than the final version (which lacks this suffix).
+			version = fmt.Sprintf("%s~%s", verComponents[0], verComponents[1])
+		}
+	}
+
+	url := fmt.Sprintf("%s%s%s%s%s%s", baseArchiveURL, t.packagePostfix, prefix, version, rev, t.urlPostfix)
 	return url
 }
 
@@ -126,9 +144,20 @@ var completeBuildArtifactConfigurations = []buildArtifact{
 		urlPostfix: "_armhf.deb",
 	},
 	{
+		os:             "deb",
+		arch:           "armv6",
+		packagePostfix: "-rpi",
+		urlPostfix:     "_armhf.deb",
+	},
+	{
 		os:         "rhel",
 		arch:       "armv7",
 		urlPostfix: ".armhfp.rpm",
+	},
+	{
+		os:         "linux",
+		arch:       "armv6",
+		urlPostfix: ".linux-armv6.tar.gz",
 	},
 	{
 		os:         "linux",
@@ -160,6 +189,11 @@ var completeBuildArtifactConfigurations = []buildArtifact{
 		arch:       "amd64",
 		urlPostfix: ".windows-amd64.zip",
 	},
+	{
+		os:         "win-installer",
+		arch:       "amd64",
+		urlPostfix: ".windows-amd64.msi",
+	},
 }
 
 type artifactFilter struct {
@@ -167,37 +201,48 @@ type artifactFilter struct {
 	arch string
 }
 
-func filterBuildArtifacts(filters []artifactFilter) ([]buildArtifact, error) {
-	var artifacts []buildArtifact
-	for _, f := range filters {
-		matched := false
+type filterType string
 
-		for _, a := range completeBuildArtifactConfigurations {
+const (
+	Add    filterType = "add"
+	Remove filterType = "remove"
+)
+
+func filterBuildArtifacts(filterFrom []buildArtifact, ft filterType, filters []artifactFilter) ([]buildArtifact, error) {
+	var artifacts []buildArtifact
+
+	for _, a := range filterFrom {
+		matched := false
+		var match buildArtifact
+
+		for _, f := range filters {
 			if f.os == a.os && f.arch == a.arch {
-				artifacts = append(artifacts, a)
+				match = a
 				matched = true
 				break
 			}
 		}
 
-		if !matched {
-			return nil, errors.New(fmt.Sprintf("No buildArtifact for os=%v, arch=%v", f.os, f.arch))
+		if matched && ft == Add {
+			artifacts = append(artifacts, match)
+		} else if !matched && ft == Remove {
+			artifacts = append(artifacts, a)
 		}
 	}
 	return artifacts, nil
 }
 
-func newBuild(baseArchiveUrl string, ba buildArtifact, version string, rt ReleaseType, sha256 string) build {
+func newBuild(url string, ba buildArtifact, sha256 string) build {
 	return build{
 		Os:     ba.os,
-		Url:    ba.getUrl(baseArchiveUrl, version, rt),
+		URL:    url,
 		Sha256: sha256,
 		Arch:   ba.arch,
 	}
 }
 
-func (p *publisher) apiUrl(url string) string {
-	return fmt.Sprintf("%s/%s%s", p.apiUri, p.product, url)
+func (p *publisher) apiURL(url string) string {
+	return fmt.Sprintf("%s/%s%s", p.apiURI, p.product, url)
 }
 
 func (p *publisher) postRequest(url string, obj interface{}, desc string) error {
@@ -207,12 +252,12 @@ func (p *publisher) postRequest(url string, obj interface{}, desc string) error 
 	}
 
 	if p.dryRun {
-		log.Println(fmt.Sprintf("POST to %s:", p.apiUrl(url)))
+		log.Println(fmt.Sprintf("POST to %s:", p.apiURL(url)))
 		log.Println(string(jsonBytes))
 		return nil
 	}
 
-	req, err := http.NewRequest(http.MethodPost, p.apiUrl(url), bytes.NewReader(jsonBytes))
+	req, err := http.NewRequest(http.MethodPost, p.apiURL(url), bytes.NewReader(jsonBytes))
 	if err != nil {
 		return err
 	}
@@ -254,14 +299,14 @@ type release struct {
 	Stable          bool      `json:"stable"`
 	Beta            bool      `json:"beta"`
 	Nightly         bool      `json:"nightly"`
-	WhatsNewUrl     string    `json:"whatsNewUrl"`
-	ReleaseNotesUrl string    `json:"releaseNotesUrl"`
+	WhatsNewURL     string    `json:"whatsNewUrl"`
+	ReleaseNotesURL string    `json:"releaseNotesUrl"`
 	Builds          []build   `json:"-"`
 }
 
 type build struct {
 	Os     string `json:"os"`
-	Url    string `json:"url"`
+	URL    string `json:"url"`
 	Sha256 string `json:"sha256"`
 	Arch   string `json:"arch"`
 }

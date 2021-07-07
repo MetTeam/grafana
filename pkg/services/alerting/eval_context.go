@@ -3,17 +3,20 @@ package alerting
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/grafana/grafana/pkg/bus"
-	"github.com/grafana/grafana/pkg/log"
-	m "github.com/grafana/grafana/pkg/models"
+	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/models"
 	"github.com/grafana/grafana/pkg/setting"
 )
 
+// EvalContext is the context object for an alert evaluation.
 type EvalContext struct {
 	Firing         bool
 	IsTestRun      bool
+	IsDebug        bool
 	EvalMatches    []*EvalMatch
 	Logs           []*ResultLogEntry
 	Error          error
@@ -23,52 +26,58 @@ type EvalContext struct {
 	Rule           *Rule
 	log            log.Logger
 
-	dashboardRef *m.DashboardRef
+	dashboardRef *models.DashboardRef
 
-	ImagePublicUrl  string
+	ImagePublicURL  string
 	ImageOnDiskPath string
 	NoDataFound     bool
-	PrevAlertState  m.AlertStateType
+	PrevAlertState  models.AlertStateType
+
+	RequestValidator models.PluginRequestValidator
 
 	Ctx context.Context
 }
 
-func NewEvalContext(alertCtx context.Context, rule *Rule) *EvalContext {
+// NewEvalContext is the EvalContext constructor.
+func NewEvalContext(alertCtx context.Context, rule *Rule, requestValidator models.PluginRequestValidator) *EvalContext {
 	return &EvalContext{
-		Ctx:            alertCtx,
-		StartTime:      time.Now(),
-		Rule:           rule,
-		Logs:           make([]*ResultLogEntry, 0),
-		EvalMatches:    make([]*EvalMatch, 0),
-		log:            log.New("alerting.evalContext"),
-		PrevAlertState: rule.State,
+		Ctx:              alertCtx,
+		StartTime:        time.Now(),
+		Rule:             rule,
+		Logs:             make([]*ResultLogEntry, 0),
+		EvalMatches:      make([]*EvalMatch, 0),
+		log:              log.New("alerting.evalContext"),
+		PrevAlertState:   rule.State,
+		RequestValidator: requestValidator,
 	}
 }
 
+// StateDescription contains visual information about the alert state.
 type StateDescription struct {
 	Color string
 	Text  string
 	Data  string
 }
 
+// GetStateModel returns the `StateDescription` based on current state.
 func (c *EvalContext) GetStateModel() *StateDescription {
 	switch c.Rule.State {
-	case m.AlertStateOK:
+	case models.AlertStateOK:
 		return &StateDescription{
 			Color: "#36a64f",
 			Text:  "OK",
 		}
-	case m.AlertStateNoData:
+	case models.AlertStateNoData:
 		return &StateDescription{
 			Color: "#888888",
 			Text:  "No Data",
 		}
-	case m.AlertStateAlerting:
+	case models.AlertStateAlerting:
 		return &StateDescription{
 			Color: "#D63232",
 			Text:  "Alerting",
 		}
-	case m.AlertStateUnknown:
+	case models.AlertStateUnknown:
 		return &StateDescription{
 			Color: "#888888",
 			Text:  "Unknown",
@@ -78,24 +87,27 @@ func (c *EvalContext) GetStateModel() *StateDescription {
 	}
 }
 
-func (c *EvalContext) ShouldUpdateAlertState() bool {
+func (c *EvalContext) shouldUpdateAlertState() bool {
 	return c.Rule.State != c.PrevAlertState
 }
 
-func (a *EvalContext) GetDurationMs() float64 {
-	return float64(a.EndTime.Nanosecond()-a.StartTime.Nanosecond()) / float64(1000000)
+// GetDurationMs returns the duration of the alert evaluation.
+func (c *EvalContext) GetDurationMs() float64 {
+	return float64(c.EndTime.Nanosecond()-c.StartTime.Nanosecond()) / float64(1000000)
 }
 
+// GetNotificationTitle returns the title of the alert rule including alert state.
 func (c *EvalContext) GetNotificationTitle() string {
 	return "[" + c.GetStateModel().Text + "] " + c.Rule.Name
 }
 
-func (c *EvalContext) GetDashboardUID() (*m.DashboardRef, error) {
+// GetDashboardUID returns the dashboard uid for the alert rule.
+func (c *EvalContext) GetDashboardUID() (*models.DashboardRef, error) {
 	if c.dashboardRef != nil {
 		return c.dashboardRef, nil
 	}
 
-	uidQuery := &m.GetDashboardRefByIdQuery{Id: c.Rule.DashboardId}
+	uidQuery := &models.GetDashboardRefByIdQuery{Id: c.Rule.DashboardID}
 	if err := bus.Dispatch(uidQuery); err != nil {
 		return nil, err
 	}
@@ -104,9 +116,10 @@ func (c *EvalContext) GetDashboardUID() (*m.DashboardRef, error) {
 	return c.dashboardRef, nil
 }
 
-const urlFormat = "%s?fullscreen=true&edit=true&tab=alert&panelId=%d&orgId=%d"
+const urlFormat = "%s?tab=alert&viewPanel=%d&orgId=%d"
 
-func (c *EvalContext) GetRuleUrl() (string, error) {
+// GetRuleURL returns the url to the dashboard containing the alert.
+func (c *EvalContext) GetRuleURL() (string, error) {
 	if c.IsTestRun {
 		return setting.AppUrl, nil
 	}
@@ -115,57 +128,120 @@ func (c *EvalContext) GetRuleUrl() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(urlFormat, m.GetFullDashboardUrl(ref.Uid, ref.Slug), c.Rule.PanelId, c.Rule.OrgId), nil
+	return fmt.Sprintf(urlFormat, models.GetFullDashboardUrl(ref.Uid, ref.Slug), c.Rule.PanelID, c.Rule.OrgID), nil
 }
 
-// GetNewState returns the new state from the alert rule evaluation
-func (c *EvalContext) GetNewState() m.AlertStateType {
+// GetNewState returns the new state from the alert rule evaluation.
+func (c *EvalContext) GetNewState() models.AlertStateType {
 	ns := getNewStateInternal(c)
-	if ns != m.AlertStateAlerting || c.Rule.For == 0 {
+	if ns != models.AlertStateAlerting || c.Rule.For == 0 {
 		return ns
 	}
 
 	since := time.Since(c.Rule.LastStateChange)
-	if c.PrevAlertState == m.AlertStatePending && since > c.Rule.For {
-		return m.AlertStateAlerting
+	if c.PrevAlertState == models.AlertStatePending && since > c.Rule.For {
+		return models.AlertStateAlerting
 	}
 
-	if c.PrevAlertState == m.AlertStateAlerting {
-		return m.AlertStateAlerting
+	if c.PrevAlertState == models.AlertStateAlerting {
+		return models.AlertStateAlerting
 	}
 
-	return m.AlertStatePending
+	return models.AlertStatePending
 }
 
-func getNewStateInternal(c *EvalContext) m.AlertStateType {
+func getNewStateInternal(c *EvalContext) models.AlertStateType {
 	if c.Error != nil {
 		c.log.Error("Alert Rule Result Error",
-			"ruleId", c.Rule.Id,
+			"ruleId", c.Rule.ID,
 			"name", c.Rule.Name,
 			"error", c.Error,
 			"changing state to", c.Rule.ExecutionErrorState.ToAlertState())
 
-		if c.Rule.ExecutionErrorState == m.ExecutionErrorKeepState {
+		if c.Rule.ExecutionErrorState == models.ExecutionErrorKeepState {
 			return c.PrevAlertState
 		}
 		return c.Rule.ExecutionErrorState.ToAlertState()
 	}
 
 	if c.Firing {
-		return m.AlertStateAlerting
+		return models.AlertStateAlerting
 	}
 
 	if c.NoDataFound {
 		c.log.Info("Alert Rule returned no data",
-			"ruleId", c.Rule.Id,
+			"ruleId", c.Rule.ID,
 			"name", c.Rule.Name,
 			"changing state to", c.Rule.NoDataState.ToAlertState())
 
-		if c.Rule.NoDataState == m.NoDataKeepState {
+		if c.Rule.NoDataState == models.NoDataKeepState {
 			return c.PrevAlertState
 		}
 		return c.Rule.NoDataState.ToAlertState()
 	}
 
-	return m.AlertStateOK
+	return models.AlertStateOK
+}
+
+// evaluateNotificationTemplateFields will treat the alert evaluation rule's name and message fields as
+// templates, and evaluate the templates using data from the alert evaluation's tags
+func (c *EvalContext) evaluateNotificationTemplateFields() error {
+	if len(c.EvalMatches) < 1 {
+		return nil
+	}
+
+	templateDataMap, err := buildTemplateDataMap(c.EvalMatches)
+	if err != nil {
+		return err
+	}
+
+	ruleMsg, err := evaluateTemplate(c.Rule.Message, templateDataMap)
+	if err != nil {
+		return err
+	}
+	c.Rule.Message = ruleMsg
+
+	ruleName, err := evaluateTemplate(c.Rule.Name, templateDataMap)
+	if err != nil {
+		return err
+	}
+	c.Rule.Name = ruleName
+
+	return nil
+}
+
+func evaluateTemplate(s string, m map[string]string) (string, error) {
+	for k, v := range m {
+		re, err := regexp.Compile(fmt.Sprintf(`\${%s}`, regexp.QuoteMeta(k)))
+		if err != nil {
+			return "", err
+		}
+		s = re.ReplaceAllString(s, v)
+	}
+
+	return s, nil
+}
+
+// buildTemplateDataMap builds a map of alert evaluation tag names to a set of associated values (comma separated)
+func buildTemplateDataMap(evalMatches []*EvalMatch) (map[string]string, error) {
+	var result = map[string]string{}
+	for _, match := range evalMatches {
+		for tagName, tagValue := range match.Tags {
+			// skip duplicate values
+			rVal, err := regexp.Compile(fmt.Sprintf(`\b%s\b`, regexp.QuoteMeta(tagValue)))
+			if err != nil {
+				return nil, err
+			}
+			rMatch := rVal.FindString(result[tagName])
+			if len(rMatch) > 0 {
+				continue
+			}
+			if _, exists := result[tagName]; exists {
+				result[tagName] = fmt.Sprintf("%s, %s", result[tagName], tagValue)
+			} else {
+				result[tagName] = tagValue
+			}
+		}
+	}
+	return result, nil
 }

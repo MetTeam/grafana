@@ -1,4 +1,4 @@
-import _ from 'lodash';
+import { cloneDeep, each, map } from 'lodash';
 import { describe, beforeEach, it, expect } from '../../../../../test/lib/common';
 import TimeSeries from 'app/core/time_series2';
 import {
@@ -8,6 +8,7 @@ import {
   calculateBucketSize,
   isHeatmapDataEqual,
 } from '../heatmap_data_converter';
+import { HeatmapData } from '../types';
 
 describe('isHeatmapDataEqual', () => {
   const ctx: any = {};
@@ -35,17 +36,17 @@ describe('isHeatmapDataEqual', () => {
   });
 
   it('should proper compare objects', () => {
-    const heatmapC = _.cloneDeep(ctx.heatmapA);
+    const heatmapC = cloneDeep(ctx.heatmapA);
     heatmapC['1422774000000'].buckets['1'].values = [1, 1.5];
 
-    const heatmapD = _.cloneDeep(ctx.heatmapA);
+    const heatmapD = cloneDeep(ctx.heatmapA);
     heatmapD['1422774000000'].buckets['1'].values = [1.5, 1, 1.6];
 
-    const heatmapE = _.cloneDeep(ctx.heatmapA);
+    const heatmapE = cloneDeep(ctx.heatmapA);
     heatmapE['1422774000000'].buckets['1'].values = [1, 1.6];
 
     const empty = {};
-    const emptyValues = _.cloneDeep(ctx.heatmapA);
+    const emptyValues = cloneDeep(ctx.heatmapA);
     emptyValues['1422774000000'].buckets['1'].values = [];
 
     expect(isHeatmapDataEqual(ctx.heatmapA, ctx.heatmapB)).toBe(true);
@@ -87,7 +88,7 @@ describe('calculateBucketSize', () => {
     });
 
     it('should properly calculate bucket size', () => {
-      _.each(ctx.bounds_set, b => {
+      each(ctx.bounds_set, (b) => {
         const bucketSize = calculateBucketSize(b.bounds, ctx.logBase);
         expect(bucketSize).toBe(b.size);
       });
@@ -107,7 +108,7 @@ describe('calculateBucketSize', () => {
     });
 
     it('should properly calculate bucket size', () => {
-      _.each(ctx.bounds_set, b => {
+      each(ctx.bounds_set, (b) => {
         const bucketSize = calculateBucketSize(b.bounds, ctx.logBase);
         expect(isEqual(bucketSize, b.size)).toBe(true);
       });
@@ -122,19 +123,31 @@ describe('HeatmapDataConverter', () => {
     ctx.series = [];
     ctx.series.push(
       new TimeSeries({
-        datapoints: [[1, 1422774000000], [1, 1422774000010], [2, 1422774060000]],
+        datapoints: [
+          [1, 1422774000000],
+          [1, 1422774000010],
+          [2, 1422774060000],
+        ],
         alias: 'series1',
       })
     );
     ctx.series.push(
       new TimeSeries({
-        datapoints: [[2, 1422774000000], [2, 1422774000010], [3, 1422774060000]],
+        datapoints: [
+          [2, 1422774000000],
+          [2, 1422774000010],
+          [3, 1422774060000],
+        ],
         alias: 'series2',
       })
     );
     ctx.series.push(
       new TimeSeries({
-        datapoints: [[5, 1422774000000], [3, 1422774000010], [4, 1422774060000]],
+        datapoints: [
+          [5, 1422774000000],
+          [3, 1422774000010],
+          [4, 1422774060000],
+        ],
         alias: 'series3',
       })
     );
@@ -223,21 +236,30 @@ describe('Histogram converter', () => {
     ctx.series = [];
     ctx.series.push(
       new TimeSeries({
-        datapoints: [[1, 1422774000000], [0, 1422774060000]],
+        datapoints: [
+          [1, 1422774000000],
+          [0, 1422774060000],
+        ],
         alias: '1',
         label: '1',
       })
     );
     ctx.series.push(
       new TimeSeries({
-        datapoints: [[5, 1422774000000], [3, 1422774060000]],
+        datapoints: [
+          [5, 1422774000000],
+          [3, 1422774060000],
+        ],
         alias: '2',
         label: '2',
       })
     );
     ctx.series.push(
       new TimeSeries({
-        datapoints: [[0, 1422774000000], [1, 1422774060000]],
+        datapoints: [
+          [0, 1422774000000],
+          [1, 1422774060000],
+        ],
         alias: '3',
         label: '3',
       })
@@ -248,7 +270,7 @@ describe('Histogram converter', () => {
     beforeEach(() => {});
 
     it('should build proper heatmap data', () => {
-      const expectedHeatmap = {
+      const expectedHeatmap: HeatmapData = {
         '1422774000000': {
           x: 1422774000000,
           buckets: {
@@ -309,12 +331,12 @@ describe('Histogram converter', () => {
 
     it('should use bucket index as a bound', () => {
       const heatmap = histogramToHeatmap(ctx.series);
-      const bucketLabels = _.map(heatmap['1422774000000'].buckets, (b, label) => label);
-      const bucketYs = _.map(heatmap['1422774000000'].buckets, 'y');
-      const bucketBottoms = _.map(heatmap['1422774000000'].buckets, b => b.bounds.bottom);
+      const bucketLabels = map(heatmap['1422774000000'].buckets, (b, label) => label);
+      const bucketYs = map(heatmap['1422774000000'].buckets, 'y');
+      const bucketBottoms = map(heatmap['1422774000000'].buckets, (b) => b.bounds.bottom);
       const expectedBounds = [0, 1, 2];
 
-      expect(bucketLabels).toEqual(_.map(expectedBounds, b => b.toString()));
+      expect(bucketLabels).toEqual(map(expectedBounds, (b) => b.toString()));
       expect(bucketYs).toEqual(expectedBounds);
       expect(bucketBottoms).toEqual(expectedBounds);
     });
@@ -322,7 +344,7 @@ describe('Histogram converter', () => {
 });
 
 describe('convertToCards', () => {
-  let buckets = {};
+  let buckets: HeatmapData = {};
 
   beforeEach(() => {
     buckets = {

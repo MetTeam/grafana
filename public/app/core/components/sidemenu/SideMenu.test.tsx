@@ -1,12 +1,10 @@
 import React from 'react';
-import { shallow } from 'enzyme';
 import { SideMenu } from './SideMenu';
-import appEvents from '../../app_events';
-import { contextSrv } from 'app/core/services/context_srv';
-
-jest.mock('../../app_events', () => ({
-  emit: jest.fn(),
-}));
+import { render, screen } from '@testing-library/react';
+import { Router } from 'react-router-dom';
+import { locationService } from '@grafana/runtime';
+import { configureStore } from 'app/store/configureStore';
+import { Provider } from 'react-redux';
 
 jest.mock('app/core/services/context_srv', () => ({
   contextSrv: {
@@ -16,55 +14,33 @@ jest.mock('app/core/services/context_srv', () => ({
     isGrafanaAdmin: false,
     isEditor: false,
     hasEditPermissionFolders: false,
-    toggleSideMenu: jest.fn(),
   },
 }));
 
-const setup = (propOverrides?: object) => {
-  const props = Object.assign(
-    {
-      loginUrl: '',
-      user: {},
-      mainLinks: [],
-      bottomeLinks: [],
-      isSignedIn: false,
-    },
-    propOverrides
-  );
+const setup = () => {
+  const store = configureStore();
 
-  return shallow(<SideMenu {...props} />);
+  return render(
+    <Provider store={store}>
+      <Router history={locationService.getHistory()}>
+        <SideMenu />
+      </Router>
+    </Provider>
+  );
 };
 
 describe('Render', () => {
-  it('should render component', () => {
-    const wrapper = setup();
-
-    expect(wrapper).toMatchSnapshot();
-  });
-});
-
-describe('Functions', () => {
-  describe('toggle side menu', () => {
-    const wrapper = setup();
-    const instance = wrapper.instance() as SideMenu;
-    instance.toggleSideMenu();
-
-    it('should call contextSrv.toggleSideMenu', () => {
-      expect(contextSrv.toggleSideMenu).toHaveBeenCalled();
-    });
-
-    it('should emit toggle sidemenu event', () => {
-      expect(appEvents.emit).toHaveBeenCalledWith('toggle-sidemenu');
-    });
+  it('should render component', async () => {
+    setup();
+    const sidemenu = await screen.findByTestId('sidemenu');
+    expect(sidemenu).toBeInTheDocument();
   });
 
-  describe('toggle side menu on mobile', () => {
-    const wrapper = setup();
-    const instance = wrapper.instance() as SideMenu;
-    instance.toggleSideMenuSmallBreakpoint();
+  it('should not render when in kiosk mode', async () => {
+    setup();
 
-    it('should emit toggle sidemenu event', () => {
-      expect(appEvents.emit).toHaveBeenCalledWith('toggle-sidemenu-mobile');
-    });
+    locationService.partial({ kiosk: 'full' });
+    const sidemenu = screen.queryByTestId('sidemenu');
+    expect(sidemenu).not.toBeInTheDocument();
   });
 });

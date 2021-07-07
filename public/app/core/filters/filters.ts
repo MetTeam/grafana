@@ -1,61 +1,46 @@
-import _ from 'lodash';
+import { isArray, isNull, isObject, isUndefined } from 'lodash';
 import angular from 'angular';
-import moment from 'moment';
 import coreModule from '../core_module';
+import { getTemplateSrv, TemplateSrv } from 'app/features/templating/template_srv';
+import { dateTime } from '@grafana/data';
 
 coreModule.filter('stringSort', () => {
-  return input => {
+  return (input: any) => {
     return input.sort();
   };
 });
 
 coreModule.filter('slice', () => {
-  return (arr, start, end) => {
-    if (!_.isUndefined(arr)) {
+  return (arr: any[], start: any, end: any) => {
+    if (!isUndefined(arr)) {
       return arr.slice(start, end);
     }
+    return arr;
   };
 });
 
 coreModule.filter('stringify', () => {
-  return arr => {
-    if (_.isObject(arr) && !_.isArray(arr)) {
+  return (arr: any[]) => {
+    if (isObject(arr) && !isArray(arr)) {
       return angular.toJson(arr);
     } else {
-      return _.isNull(arr) ? null : arr.toString();
+      return isNull(arr) ? null : arr.toString();
     }
   };
 });
 
 coreModule.filter('moment', () => {
-  return (date, mode) => {
+  return (date: string, mode: string) => {
     switch (mode) {
       case 'ago':
-        return moment(date).fromNow();
+        return dateTime(date).fromNow();
     }
-    return moment(date).fromNow();
+    return dateTime(date).fromNow();
   };
 });
 
-coreModule.filter('noXml', () => {
-  const noXml = text => {
-    return _.isString(text)
-      ? text
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/'/g, '&#39;')
-          .replace(/"/g, '&quot;')
-      : text;
-  };
-  return text => {
-    return _.isArray(text) ? _.map(text, noXml) : noXml(text);
-  };
-});
-
-/** @ngInject */
-function interpolateTemplateVars(templateSrv) {
-  const filterFunc: any = (text, scope) => {
+function interpolateTemplateVars(templateSrv: TemplateSrv = getTemplateSrv()) {
+  const filterFunc: any = (text: string, scope: any) => {
     let scopedVars;
     if (scope.ctrl) {
       scopedVars = (scope.ctrl.panel || scope.ctrl.row).scopedVars;

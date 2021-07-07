@@ -1,14 +1,25 @@
 import React from 'react';
 import { shallow } from 'enzyme';
+import { NavModel } from '@grafana/data';
+
 import { OrgDetailsPage, Props } from './OrgDetailsPage';
-import { NavModel, Organization } from '../../types';
+import { Organization } from '../../types';
+import { mockToolkitActionCreator } from 'test/core/redux/mocks';
+import { setOrganizationName } from './state/reducers';
 
 const setup = (propOverrides?: object) => {
   const props: Props = {
     organization: {} as Organization,
-    navModel: {} as NavModel,
+    navModel: {
+      main: {
+        text: 'Configuration',
+      },
+      node: {
+        text: 'Org details',
+      },
+    } as NavModel,
     loadOrganization: jest.fn(),
-    setOrganizationName: jest.fn(),
+    setOrganizationName: mockToolkitActionCreator(setOrganizationName),
     updateOrganization: jest.fn(),
   };
 

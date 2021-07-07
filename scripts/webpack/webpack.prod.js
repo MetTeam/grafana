@@ -1,17 +1,17 @@
 'use strict';
 
 const merge = require('webpack-merge');
-const UglifyJsPlugin = require('uglifyjs-webpack-plugin');
+const TerserPlugin = require('terser-webpack-plugin');
 const common = require('./webpack.common.js');
 const path = require('path');
-const ngAnnotatePlugin = require('ng-annotate-webpack-plugin');
-const HtmlWebpackPlugin = require("html-webpack-plugin");
-const MiniCssExtractPlugin = require("mini-css-extract-plugin");
-const OptimizeCSSAssetsPlugin = require("optimize-css-assets-webpack-plugin");
+const HtmlWebpackPlugin = require('html-webpack-plugin');
+const MiniCssExtractPlugin = require('mini-css-extract-plugin');
+const OptimizeCSSAssetsPlugin = require('optimize-css-assets-webpack-plugin');
+const getBabelConfig = require('./babel.config');
 
 module.exports = merge(common, {
   mode: 'production',
-  devtool: "source-map",
+  devtool: 'source-map',
 
   entry: {
     dark: './public/sass/grafana.dark.scss',
@@ -19,70 +19,52 @@ module.exports = merge(common, {
   },
 
   module: {
+    // Note: order is bottom-to-top and/or right-to-left
     rules: [
       {
         test: /\.tsx?$/,
-        enforce: 'pre',
         exclude: /node_modules/,
-        use: {
-          loader: 'tslint-loader',
-          options: {
-            emitErrors: true,
-            typeCheck: false,
-          }
-        }
-      },
-      {
-        test: /\.tsx?$/,
-        exclude: /node_modules/,
-        use: {
-          loader: 'ts-loader',
-          options: {
-            transpileOnly: true
+        use: [
+          {
+            loader: 'babel-loader',
+            options: getBabelConfig(),
           },
-        },
+        ],
       },
       require('./sass.rule.js')({
-        sourceMap: false, minimize: false, preserveUrl: false
-      })
-    ]
-  },
-
-  optimization: {
-    splitChunks: {
-      cacheGroups: {
-        commons: {
-          test: /[\\/]node_modules[\\/].*[jt]sx?$/,
-          name: "vendor",
-          chunks: "all"
-        }
-      }
-    },
-    minimizer: [
-      new UglifyJsPlugin({
-        cache: true,
-        parallel: true,
-        sourceMap: true
+        sourceMap: false,
+        preserveUrl: false,
       }),
-      new OptimizeCSSAssetsPlugin({})
-    ]
+    ],
   },
-
+  optimization: {
+    nodeEnv: 'production',
+    minimizer: [
+      new TerserPlugin({
+        cache: false,
+        parallel: false,
+        sourceMap: true,
+      }),
+      new OptimizeCSSAssetsPlugin({}),
+    ],
+  },
   plugins: [
     new MiniCssExtractPlugin({
-      filename: "grafana.[name].[hash].css"
+      filename: 'grafana.[name].[hash].css',
     }),
-    new ngAnnotatePlugin(),
     new HtmlWebpackPlugin({
       filename: path.resolve(__dirname, '../../public/views/error.html'),
       template: path.resolve(__dirname, '../../public/views/error-template.html'),
       inject: false,
+      excludeChunks: ['dark', 'light'],
+      chunksSortMode: 'none',
     }),
     new HtmlWebpackPlugin({
       filename: path.resolve(__dirname, '../../public/views/index.html'),
       template: path.resolve(__dirname, '../../public/views/index-template.html'),
-      inject: 'body',
-      chunks: ['vendor', 'app'],
+      inject: false,
+      excludeChunks: ['manifest', 'dark', 'light'],
+      chunksSortMode: 'none',
     }),
     function () {
       this.hooks.done.tap('Done', function (stats) {
@@ -91,6 +73,6 @@ module.exports = merge(common, {
           process.exit(1);
         }
       });
-    }
-  ]
+    },
+  ],
 });

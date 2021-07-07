@@ -1,10 +1,14 @@
 import React from 'react';
 import { FolderSettingsPage, Props } from './FolderSettingsPage';
-import { NavModel } from 'app/types';
 import { shallow } from 'enzyme';
+import { NavModel } from '@grafana/data';
+import { mockToolkitActionCreator } from 'test/core/redux/mocks';
+import { setFolderTitle } from './state/reducers';
+import { getRouteComponentProps } from 'app/core/navigation/__mocks__/routeProps';
 
 const setup = (propOverrides?: object) => {
   const props: Props = {
+    ...getRouteComponentProps(),
     navModel: {} as NavModel,
     folderUid: '1234',
     folder: {
@@ -18,7 +22,7 @@ const setup = (propOverrides?: object) => {
       permissions: [],
     },
     getFolderByUid: jest.fn(),
-    setFolderTitle: jest.fn(),
+    setFolderTitle: mockToolkitActionCreator(setFolderTitle),
     saveFolder: jest.fn(),
     deleteFolder: jest.fn(),
   };

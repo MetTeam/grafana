@@ -1,88 +1,76 @@
-import React, { PureComponent } from 'react';
+import React from 'react';
 import { hot } from 'react-hot-loader';
-import { connect } from 'react-redux';
-import PageHeader from 'app/core/components/PageHeader/PageHeader';
-import OrgActionBar from 'app/core/components/OrgActionBar/OrgActionBar';
-import PageLoader from 'app/core/components/PageLoader/PageLoader';
+import { connect, ConnectedProps } from 'react-redux';
+import Page from 'app/core/components/Page/Page';
+import PageActionBar from 'app/core/components/PageActionBar/PageActionBar';
 import PluginList from './PluginList';
-import { NavModel, Plugin } from 'app/types';
-import { loadPlugins, setPluginsLayoutMode, setPluginsSearchQuery } from './state/actions';
-import { getNavModel } from '../../core/selectors/navModel';
-import { getLayoutMode, getPlugins, getPluginsSearchQuery } from './state/selectors';
-import { LayoutMode } from '../../core/components/LayoutSelector/LayoutSelector';
+import { loadPlugins } from './state/actions';
+import { getNavModel } from 'app/core/selectors/navModel';
+import { getPlugins, getPluginsSearchQuery } from './state/selectors';
+import { StoreState } from 'app/types';
+import { setPluginsSearchQuery } from './state/reducers';
+import { useAsync } from 'react-use';
+import { selectors } from '@grafana/e2e-selectors';
+import { PluginsErrorsInfo } from './PluginsErrorsInfo';
 
-export interface Props {
-  navModel: NavModel;
-  plugins: Plugin[];
-  layoutMode: LayoutMode;
-  searchQuery: string;
-  hasFetched: boolean;
-  loadPlugins: typeof loadPlugins;
-  setPluginsLayoutMode: typeof setPluginsLayoutMode;
-  setPluginsSearchQuery: typeof setPluginsSearchQuery;
-}
-
-export class PluginListPage extends PureComponent<Props> {
-  componentDidMount() {
-    this.fetchPlugins();
-  }
-
-  async fetchPlugins() {
-    await this.props.loadPlugins();
-  }
-
-  render() {
-    const {
-      hasFetched,
-      navModel,
-      plugins,
-      layoutMode,
-      setPluginsLayoutMode,
-      setPluginsSearchQuery,
-      searchQuery,
-    } = this.props;
-
-    const linkButton = {
-      href: 'https://grafana.com/plugins?utm_source=grafana_plugin_list',
-      title: 'Find more plugins on Grafana.com',
-    };
-
-    return (
-      <div>
-        <PageHeader model={navModel} />
-        <div className="page-container page-body">
-          <OrgActionBar
-            searchQuery={searchQuery}
-            layoutMode={layoutMode}
-            onSetLayoutMode={mode => setPluginsLayoutMode(mode)}
-            setSearchQuery={query => setPluginsSearchQuery(query)}
-            linkButton={linkButton}
-          />
-          {hasFetched ? (
-            plugins && <PluginList plugins={plugins} layoutMode={layoutMode} />
-          ) : (
-            <PageLoader pageName="Plugins" />
-          )}
-        </div>
-      </div>
-    );
-  }
-}
-
-function mapStateToProps(state) {
-  return {
-    navModel: getNavModel(state.navIndex, 'plugins'),
-    plugins: getPlugins(state.plugins),
-    layoutMode: getLayoutMode(state.plugins),
-    searchQuery: getPluginsSearchQuery(state.plugins),
-    hasFetched: state.plugins.hasFetched,
-  };
-}
+const mapStateToProps = (state: StoreState) => ({
+  navModel: getNavModel(state.navIndex, 'plugins'),
+  plugins: getPlugins(state.plugins),
+  searchQuery: getPluginsSearchQuery(state.plugins),
+  hasFetched: state.plugins.hasFetched,
+});
 
 const mapDispatchToProps = {
   loadPlugins,
-  setPluginsLayoutMode,
   setPluginsSearchQuery,
+};
+
+const connector = connect(mapStateToProps, mapDispatchToProps);
+export type Props = ConnectedProps<typeof connector>;
+
+export const PluginListPage: React.FC<Props> = ({
+  hasFetched,
+  navModel,
+  plugins,
+  setPluginsSearchQuery,
+  searchQuery,
+  loadPlugins,
+}) => {
+  useAsync(async () => {
+    loadPlugins();
+  }, [loadPlugins]);
+
+  const linkButton = {
+    href: 'https://grafana.com/plugins?utm_source=grafana_plugin_list',
+    title: 'Find more plugins on Grafana.com',
+  };
+
+  return (
+    <Page navModel={navModel} aria-label={selectors.pages.PluginsList.page}>
+      <Page.Contents isLoading={!hasFetched}>
+        <>
+          <PageActionBar
+            searchQuery={searchQuery}
+            setSearchQuery={(query) => setPluginsSearchQuery(query)}
+            linkButton={linkButton}
+            placeholder="Search by name, author, description or type"
+            target="_blank"
+          />
+
+          <PluginsErrorsInfo>
+            <>
+              <br />
+              <p>
+                Note that <strong>unsigned front-end datasource and panel plugins</strong> are still usable, but this is
+                subject to change in the upcoming releases of Grafana
+              </p>
+            </>
+          </PluginsErrorsInfo>
+          {hasFetched && plugins && <PluginList plugins={plugins} />}
+        </>
+      </Page.Contents>
+    </Page>
+  );
 };
 
 export default hot(module)(connect(mapStateToProps, mapDispatchToProps)(PluginListPage));

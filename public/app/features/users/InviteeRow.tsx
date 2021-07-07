@@ -1,7 +1,8 @@
-import React, { createRef, PureComponent } from 'react';
+import React, { PureComponent } from 'react';
 import { connect } from 'react-redux';
 import { Invitee } from 'app/types';
 import { revokeInvite } from './state/actions';
+import { Button, ClipboardButton } from '@grafana/ui';
 
 export interface Props {
   invitee: Invitee;
@@ -9,17 +10,6 @@ export interface Props {
 }
 
 class InviteeRow extends PureComponent<Props> {
-  private copyUrlRef = createRef<HTMLTextAreaElement>();
-
-  copyToClipboard = () => {
-    const node = this.copyUrlRef.current;
-
-    if (node) {
-      node.select();
-      document.execCommand('copy');
-    }
-  };
-
   render() {
     const { invitee, revokeInvite } = this.props;
     return (
@@ -27,21 +17,13 @@ class InviteeRow extends PureComponent<Props> {
         <td>{invitee.email}</td>
         <td>{invitee.name}</td>
         <td className="text-right">
-          <button className="btn btn-inverse btn-mini" onClick={this.copyToClipboard}>
-            <textarea
-              readOnly={true}
-              value={invitee.url}
-              style={{ position: 'absolute', right: -1000 }}
-              ref={this.copyUrlRef}
-            />
-            <i className="fa fa-clipboard" /> Copy Invite
-          </button>
+          <ClipboardButton variant="secondary" size="sm" getText={() => invitee.url}>
+            Copy Invite
+          </ClipboardButton>
           &nbsp;
         </td>
         <td>
-          <button className="btn btn-danger btn-mini" onClick={() => revokeInvite(invitee.code)}>
-            <i className="fa fa-remove" />
-          </button>
+          <Button variant="destructive" size="sm" icon="times" onClick={() => revokeInvite(invitee.code)} />
         </td>
       </tr>
     );

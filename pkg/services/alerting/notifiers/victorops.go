@@ -1,11 +1,12 @@
 package notifiers
 
 import (
+	"strings"
 	"time"
 
 	"github.com/grafana/grafana/pkg/bus"
 	"github.com/grafana/grafana/pkg/components/simplejson"
-	"github.com/grafana/grafana/pkg/log"
+	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/models"
 	"github.com/grafana/grafana/pkg/services/alerting"
 	"github.com/grafana/grafana/pkg/setting"
@@ -14,30 +15,33 @@ import (
 // AlertStateCritical - Victorops uses "CRITICAL" string to indicate "Alerting" state
 const AlertStateCritical = "CRITICAL"
 
-const AlertStateRecovery = "RECOVERY"
+// AlertStateWarning - VictorOps "WARNING" message type
+const AlertStateWarning = "WARNING"
+const alertStateRecovery = "RECOVERY"
 
 func init() {
 	alerting.RegisterNotifier(&alerting.NotifierPlugin{
 		Type:        "victorops",
 		Name:        "VictorOps",
 		Description: "Sends notifications to VictorOps",
+		Heading:     "VictorOps settings",
 		Factory:     NewVictoropsNotifier,
-		OptionsTemplate: `
-      <h3 class="page-heading">VictorOps settings</h3>
-      <div class="gf-form">
-        <span class="gf-form-label width-6">Url</span>
-        <input type="text" required class="gf-form-input max-width-30" ng-model="ctrl.model.settings.url" placeholder="VictorOps url"></input>
-      </div>
-      <div class="gf-form">
-        <gf-form-switch
-           class="gf-form"
-           label="Auto resolve incidents"
-           label-class="width-14"
-           checked="ctrl.model.settings.autoResolve"
-           tooltip="Resolve incidents in VictorOps once the alert goes back to ok.">
-        </gf-form-switch>
-      </div>
-    `,
+		Options: []alerting.NotifierOption{
+			{
+				Label:        "Url",
+				Element:      alerting.ElementTypeInput,
+				InputType:    alerting.InputTypeText,
+				Placeholder:  "VictorOps url",
+				PropertyName: "url",
+				Required:     true,
+			},
+			{
+				Label:        "Auto resolve incidents",
+				Description:  "Resolve incidents in VictorOps once the alert goes back to ok.",
+				Element:      alerting.ElementTypeCheckbox,
+				PropertyName: "autoResolve",
+			},
+		},
 	})
 }
 
@@ -49,12 +53,14 @@ func NewVictoropsNotifier(model *models.AlertNotification) (alerting.Notifier, e
 	if url == "" {
 		return nil, alerting.ValidationError{Reason: "Could not find victorops url property in settings"}
 	}
+	noDataAlertType := model.Settings.Get("noDataAlertType").MustString(AlertStateWarning)
 
 	return &VictoropsNotifier{
-		NotifierBase: NewNotifierBase(model),
-		URL:          url,
-		AutoResolve:  autoResolve,
-		log:          log.New("alerting.notifier.victorops"),
+		NotifierBase:    NewNotifierBase(model),
+		URL:             url,
+		NoDataAlertType: noDataAlertType,
+		AutoResolve:     autoResolve,
+		log:             log.New("alerting.notifier.victorops"),
 	}, nil
 }
 
@@ -63,53 +69,95 @@ func NewVictoropsNotifier(model *models.AlertNotification) (alerting.Notifier, e
 // Victorops specifications (http://victorops.force.com/knowledgebase/articles/Integration/Alert-Ingestion-API-Documentation/)
 type VictoropsNotifier struct {
 	NotifierBase
-	URL         string
-	AutoResolve bool
-	log         log.Logger
+	URL             string
+	NoDataAlertType string
+	AutoResolve     bool
+	log             log.Logger
 }
 
-// Notify sends notification to Victorops via POST to URL endpoint
-func (this *VictoropsNotifier) Notify(evalContext *alerting.EvalContext) error {
-	this.log.Info("Executing victorops notification", "ruleId", evalContext.Rule.Id, "notification", this.Name)
-
-	ruleUrl, err := evalContext.GetRuleUrl()
+func (vn *VictoropsNotifier) buildEventPayload(evalContext *alerting.EvalContext) (*simplejson.Json, error) {
+	ruleURL, err := evalContext.GetRuleURL()
 	if err != nil {
-		this.log.Error("Failed get rule link", "error", err)
-		return err
+		vn.log.Error("Failed get rule link", "error", err)
+		return nil, err
 	}
 
-	if evalContext.Rule.State == models.AlertStateOK && !this.AutoResolve {
-		this.log.Info("Not alerting VictorOps", "state", evalContext.Rule.State, "auto resolve", this.AutoResolve)
-		return nil
+	if evalContext.Rule.State == models.AlertStateOK && !vn.AutoResolve {
+		vn.log.Info("Not alerting VictorOps", "state", evalContext.Rule.State, "auto resolve", vn.AutoResolve)
+		return nil, nil
 	}
 
-	messageType := evalContext.Rule.State
-	if evalContext.Rule.State == models.AlertStateAlerting { // translate 'Alerting' to 'CRITICAL' (Victorops analog)
-		messageType = AlertStateCritical
+	messageType := AlertStateCritical // Default to alerting and change based on state checks (Ensures string type)
+	for _, tag := range evalContext.Rule.AlertRuleTags {
+		if strings.ToLower(tag.Key) == "severity" {
+			// Only set severity if it's one of the PD supported enum values
+			// Info, Warning, Error, or Critical (case insensitive)
+			switch sev := strings.ToUpper(tag.Value); sev {
+			case "INFO":
+				fallthrough
+			case "WARNING":
+				fallthrough
+			case "CRITICAL":
+				messageType = sev
+			default:
+				vn.log.Warn("Ignoring invalid severity tag", "severity", sev)
+			}
+		}
+	}
+
+	if evalContext.Rule.State == models.AlertStateNoData { // translate 'NODATA' to set alert
+		messageType = vn.NoDataAlertType
 	}
 
 	if evalContext.Rule.State == models.AlertStateOK {
-		messageType = AlertStateRecovery
+		messageType = alertStateRecovery
+	}
+
+	fields := make(map[string]interface{})
+	fieldLimitCount := 4
+	for index, evt := range evalContext.EvalMatches {
+		fields[evt.Metric] = evt.Value
+		if index > fieldLimitCount {
+			break
+		}
 	}
 
 	bodyJSON := simplejson.New()
 	bodyJSON.Set("message_type", messageType)
 	bodyJSON.Set("entity_id", evalContext.Rule.Name)
+	bodyJSON.Set("entity_display_name", evalContext.GetNotificationTitle())
 	bodyJSON.Set("timestamp", time.Now().Unix())
 	bodyJSON.Set("state_start_time", evalContext.StartTime.Unix())
 	bodyJSON.Set("state_message", evalContext.Rule.Message)
 	bodyJSON.Set("monitoring_tool", "Grafana v"+setting.BuildVersion)
-	bodyJSON.Set("alert_url", ruleUrl)
+	bodyJSON.Set("alert_url", ruleURL)
+	bodyJSON.Set("metrics", fields)
 
-	if evalContext.ImagePublicUrl != "" {
-		bodyJSON.Set("image_url", evalContext.ImagePublicUrl)
+	if evalContext.Error != nil {
+		bodyJSON.Set("error_message", evalContext.Error.Error())
+	}
+
+	if vn.NeedsImage() && evalContext.ImagePublicURL != "" {
+		bodyJSON.Set("image_url", evalContext.ImagePublicURL)
+	}
+
+	return bodyJSON, nil
+}
+
+// Notify sends notification to Victorops via POST to URL endpoint
+func (vn *VictoropsNotifier) Notify(evalContext *alerting.EvalContext) error {
+	vn.log.Info("Executing victorops notification", "ruleId", evalContext.Rule.ID, "notification", vn.Name)
+
+	bodyJSON, err := vn.buildEventPayload(evalContext)
+	if err != nil {
+		return err
 	}
 
 	data, _ := bodyJSON.MarshalJSON()
-	cmd := &models.SendWebhookSync{Url: this.URL, Body: string(data)}
+	cmd := &models.SendWebhookSync{Url: vn.URL, Body: string(data)}
 
 	if err := bus.DispatchCtx(evalContext.Ctx, cmd); err != nil {
-		this.log.Error("Failed to send Victorops notification", "error", err, "webhook", this.Name)
+		vn.log.Error("Failed to send Victorops notification", "error", err, "webhook", vn.Name)
 		return err
 	}
 

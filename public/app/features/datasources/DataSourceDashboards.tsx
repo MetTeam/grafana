@@ -1,41 +1,60 @@
+// Libraries
 import React, { PureComponent } from 'react';
-import { hot } from 'react-hot-loader';
-import { connect } from 'react-redux';
-import PageHeader from 'app/core/components/PageHeader/PageHeader';
+import { connect, ConnectedProps } from 'react-redux';
+
+// Components
+import Page from 'app/core/components/Page/Page';
 import DashboardTable from './DashboardsTable';
-import { DataSource, NavModel, PluginDashboard } from 'app/types';
+
+// Actions & Selectors
 import { getNavModel } from 'app/core/selectors/navModel';
-import { getRouteParamsId } from 'app/core/selectors/location';
 import { loadDataSource } from './state/actions';
 import { loadPluginDashboards } from '../plugins/state/actions';
 import { importDashboard, removeDashboard } from '../dashboard/state/actions';
 import { getDataSource } from './state/selectors';
 
-export interface Props {
-  navModel: NavModel;
-  dashboards: PluginDashboard[];
-  dataSource: DataSource;
-  pageId: number;
-  importDashboard: typeof importDashboard;
-  loadDataSource: typeof loadDataSource;
-  loadPluginDashboards: typeof loadPluginDashboards;
-  removeDashboard: typeof removeDashboard;
+// Types
+import { PluginDashboard, StoreState } from 'app/types';
+import { GrafanaRouteComponentProps } from 'app/core/navigation/types';
+
+export interface OwnProps extends GrafanaRouteComponentProps<{ id: string }> {}
+
+function mapStateToProps(state: StoreState, props: OwnProps) {
+  const dataSourceId = parseInt(props.match.params.id, 10);
+
+  return {
+    navModel: getNavModel(state.navIndex, `datasource-dashboards-${dataSourceId}`),
+    dashboards: state.plugins.dashboards,
+    dataSource: getDataSource(state.dataSources, dataSourceId),
+    isLoading: state.plugins.isLoadingPluginDashboards,
+    dataSourceId,
+  };
 }
+
+const mapDispatchToProps = {
+  importDashboard,
+  loadDataSource,
+  loadPluginDashboards,
+  removeDashboard,
+};
+
+const connector = connect(mapStateToProps, mapDispatchToProps);
+
+export type Props = OwnProps & ConnectedProps<typeof connector>;
 
 export class DataSourceDashboards extends PureComponent<Props> {
   async componentDidMount() {
-    const { loadDataSource, pageId } = this.props;
-
-    await loadDataSource(pageId);
+    const { loadDataSource, dataSourceId } = this.props;
+    await loadDataSource(dataSourceId);
     this.props.loadPluginDashboards();
   }
 
   onImport = (dashboard: PluginDashboard, overwrite: boolean) => {
     const { dataSource, importDashboard } = this.props;
-    const data = {
+    const data: any = {
       pluginId: dashboard.pluginId,
       path: dashboard.path,
-      overwrite: overwrite,
+      overwrite,
       inputs: [],
     };
 
@@ -56,38 +75,19 @@ export class DataSourceDashboards extends PureComponent<Props> {
   };
 
   render() {
-    const { dashboards, navModel } = this.props;
+    const { dashboards, navModel, isLoading } = this.props;
     return (
-      <div>
-        <PageHeader model={navModel} />
-        <div className="page-container page-body">
+      <Page navModel={navModel}>
+        <Page.Contents isLoading={isLoading}>
           <DashboardTable
             dashboards={dashboards}
             onImport={(dashboard, overwrite) => this.onImport(dashboard, overwrite)}
-            onRemove={dashboard => this.onRemove(dashboard)}
+            onRemove={(dashboard) => this.onRemove(dashboard)}
           />
-        </div>
-      </div>
+        </Page.Contents>
+      </Page>
     );
   }
 }
 
-function mapStateToProps(state) {
-  const pageId = getRouteParamsId(state.location);
-
-  return {
-    navModel: getNavModel(state.navIndex, `datasource-dashboards-${pageId}`),
-    pageId: pageId,
-    dashboards: state.plugins.dashboards,
-    dataSource: getDataSource(state.dataSources, pageId),
-  };
-}
-
-const mapDispatchToProps = {
-  importDashboard,
-  loadDataSource,
-  loadPluginDashboards,
-  removeDashboard,
-};
-
-export default hot(module)(connect(mapStateToProps, mapDispatchToProps)(DataSourceDashboards));
+export default connector(DataSourceDashboards);

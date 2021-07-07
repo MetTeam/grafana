@@ -482,7 +482,7 @@
             drawText(
                 cellLayout.cx,
                 cellLayout.y + cellLayout.cellMargin + layout.labelMargin + cellLayout.offsetY,
-                "flotGagueLabel" + i,
+                "flotGaugeLabel" + i,
                 gaugeOptionsi.label.formatter ? gaugeOptionsi.label.formatter(item.label, item.data[0][1]) : text,
                 gaugeOptionsi.label);
         }
@@ -502,7 +502,7 @@
             drawText(
                 cellLayout.cx,
                 cellLayout.cy - (gaugeOptionsi.value.font.size / 2),
-                "flotGagueValue" + i,
+                "flotGaugeValue" + i,
                 gaugeOptionsi.value.formatter ? gaugeOptionsi.value.formatter(item.label, item.data[0][1]) : text,
                 gaugeOptionsi.value);
         }
@@ -550,7 +550,7 @@
                 cellLayout.cy
                     + ((layout.thresholdLabelMargin + (layout.thresholdLabelFontSize / 2) + layout.radius)
                         * Math.sin(toRad(a))),
-                "flotGagueThresholdValue" + i,
+                "flotGaugeThresholdValue" + i,
                 gaugeOptionsi.threshold.label.formatter ? gaugeOptionsi.threshold.label.formatter(value) : value,
                 gaugeOptionsi.threshold.label,
                 a);
@@ -594,6 +594,8 @@
 
             span.css("position", "absolute");
             span.css("top", y + "px");
+            span.css("white-space", "nowrap");
+
             if (textOptions.font.size) {
               span.css("font-size", textOptions.font.size + "px");
             }
@@ -935,16 +937,7 @@
                         }
                     },
                     values: [
-                        {
-                            value: 50,
-                            color: "lightgreen"
-                        }, {
-                            value: 80,
-                            color: "yellow"
-                        }, {
-                            value: 100,
-                            color: "red"
-                        }
+
                     ]
                 }
             }
@@ -960,3 +953,4 @@
     });
 
 })(jQuery);
+

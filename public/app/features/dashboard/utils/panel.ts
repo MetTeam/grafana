@@ -2,39 +2,48 @@
 import store from 'app/core/store';
 
 // Models
-import { DashboardModel } from 'app/features/dashboard/dashboard_model';
-import { PanelModel } from 'app/features/dashboard/panel_model';
-import { TimeRange } from '@grafana/ui';
+import { DashboardModel } from 'app/features/dashboard/state/DashboardModel';
+import { PanelModel } from 'app/features/dashboard/state/PanelModel';
+import { TimeRange, AppEvents, rangeUtil, dateMath } from '@grafana/data';
 
 // Utils
 import { isString as _isString } from 'lodash';
-import * as rangeUtil from 'app/core/utils/rangeutil';
-import * as dateMath from 'app/core/utils/datemath';
 import appEvents from 'app/core/app_events';
+import config from 'app/core/config';
 
 // Services
-import templateSrv from 'app/features/templating/template_srv';
+import { getTemplateSrv } from '@grafana/runtime';
 
 // Constants
-import { LS_PANEL_COPY_KEY } from 'app/core/constants';
+import { LS_PANEL_COPY_KEY, PANEL_BORDER } from 'app/core/constants';
+
+import { ShareModal } from 'app/features/dashboard/components/ShareModal';
+import { ShowConfirmModalEvent, ShowModalReactEvent } from '../../../types/events';
+import { AddLibraryPanelModal } from 'app/features/library-panels/components/AddLibraryPanelModal/AddLibraryPanelModal';
+import { UnlinkModal } from 'app/features/library-panels/components/UnlinkModal/UnlinkModal';
 
 export const removePanel = (dashboard: DashboardModel, panel: PanelModel, ask: boolean) => {
   // confirm deletion
   if (ask !== false) {
-    const text2 = panel.alert ? 'Panel includes an alert rule, removing panel will also remove alert rule' : null;
-    const confirmText = panel.alert ? 'YES' : null;
+    const text2 = panel.alert
+      ? 'Panel includes an alert rule. removing the panel will also remove the alert rule'
+      : undefined;
+    const confirmText = panel.alert ? 'YES' : undefined;
 
-    appEvents.emit('confirm-modal', {
-      title: 'Remove Panel',
-      text: 'Are you sure you want to remove this panel?',
-      text2: text2,
-      icon: 'fa-trash',
-      confirmText: confirmText,
-      yesText: 'Remove',
-      onConfirm: () => removePanel(dashboard, panel, false),
-    });
+    appEvents.publish(
+      new ShowConfirmModalEvent({
+        title: 'Remove panel',
+        text: 'Are you sure you want to remove this panel?',
+        text2: text2,
+        icon: 'trash-alt',
+        confirmText: confirmText,
+        yesText: 'Remove',
+        onConfirm: () => removePanel(dashboard, panel, false),
+      })
+    );
     return;
   }
+
   dashboard.removePanel(panel);
 };
 
@@ -43,49 +52,53 @@ export const duplicatePanel = (dashboard: DashboardModel, panel: PanelModel) => 
 };
 
 export const copyPanel = (panel: PanelModel) => {
-  store.set(LS_PANEL_COPY_KEY, JSON.stringify(panel.getSaveModel()));
-  appEvents.emit('alert-success', ['Panel copied. Open Add Panel to paste']);
-};
+  let saveModel = panel;
+  if (panel instanceof PanelModel) {
+    saveModel = panel.getSaveModel();
+  }
 
-const replacePanel = (dashboard: DashboardModel, newPanel: PanelModel, oldPanel: PanelModel) => {
-  const index = dashboard.panels.findIndex(panel => {
-    return panel.id === oldPanel.id;
-  });
-
-  const deletedPanel = dashboard.panels.splice(index, 1);
-  dashboard.events.emit('panel-removed', deletedPanel);
-
-  newPanel = new PanelModel(newPanel);
-  newPanel.id = oldPanel.id;
-
-  dashboard.panels.splice(index, 0, newPanel);
-  dashboard.sortPanelsByGridPos();
-  dashboard.events.emit('panel-added', newPanel);
-};
-
-export const editPanelJson = (dashboard: DashboardModel, panel: PanelModel) => {
-  const model = {
-    object: panel.getSaveModel(),
-    updateHandler: (newPanel: PanelModel, oldPanel: PanelModel) => {
-      replacePanel(dashboard, newPanel, oldPanel);
-    },
-    enableCopy: true,
-  };
-
-  appEvents.emit('show-modal', {
-    src: 'public/app/partials/edit_json.html',
-    model: model,
-  });
+  store.set(LS_PANEL_COPY_KEY, JSON.stringify(saveModel));
+  appEvents.emit(AppEvents.alertSuccess, ['Panel copied. Click **Add panel** icon to paste.']);
 };
 
 export const sharePanel = (dashboard: DashboardModel, panel: PanelModel) => {
-  appEvents.emit('show-modal', {
-    src: 'public/app/features/dashboard/partials/shareModal.html',
-    model: {
-      dashboard: dashboard,
-      panel: panel,
-    },
-  });
+  appEvents.publish(
+    new ShowModalReactEvent({
+      component: ShareModal,
+      props: {
+        dashboard: dashboard,
+        panel: panel,
+      },
+    })
+  );
+};
+
+export const addLibraryPanel = (dashboard: DashboardModel, panel: PanelModel) => {
+  appEvents.publish(
+    new ShowModalReactEvent({
+      component: AddLibraryPanelModal,
+      props: {
+        panel,
+        initialFolderId: dashboard.meta.folderId,
+        isOpen: true,
+      },
+    })
+  );
+};
+
+export const unlinkLibraryPanel = (panel: PanelModel) => {
+  appEvents.publish(
+    new ShowModalReactEvent({
+      component: UnlinkModal,
+      props: {
+        onConfirm: () => {
+          delete panel.libraryPanel;
+          panel.render();
+        },
+        isOpen: true,
+      },
+    })
+  );
 };
 
 export const refreshPanel = (panel: PanelModel) => {
@@ -93,7 +106,7 @@ export const refreshPanel = (panel: PanelModel) => {
 };
 
 export const toggleLegend = (panel: PanelModel) => {
-  console.log('Toggle legend is not implemented yet');
+  console.warn('Toggle legend is not implemented yet');
   // We need to set panel.legend defaults first
   // panel.legend.show = !panel.legend.show;
   refreshPanel(panel);
@@ -111,7 +124,7 @@ export function applyPanelTimeOverrides(panel: PanelModel, timeRange: TimeRange)
   };
 
   if (panel.timeFrom) {
-    const timeFromInterpolated = templateSrv.replace(panel.timeFrom, panel.scopedVars);
+    const timeFromInterpolated = getTemplateSrv().replace(panel.timeFrom, panel.scopedVars);
     const timeFromInfo = rangeUtil.describeTextRange(timeFromInterpolated);
     if (timeFromInfo.invalid) {
       newTimeData.timeInfo = 'invalid time override';
@@ -119,11 +132,11 @@ export function applyPanelTimeOverrides(panel: PanelModel, timeRange: TimeRange)
     }
 
     if (_isString(timeRange.raw.from)) {
-      const timeFromDate = dateMath.parse(timeFromInfo.from);
+      const timeFromDate = dateMath.parse(timeFromInfo.from)!;
       newTimeData.timeInfo = timeFromInfo.display;
       newTimeData.timeRange = {
         from: timeFromDate,
-        to: dateMath.parse(timeFromInfo.to),
+        to: dateMath.parse(timeFromInfo.to)!,
         raw: {
           from: timeFromInfo.from,
           to: timeFromInfo.to,
@@ -133,7 +146,7 @@ export function applyPanelTimeOverrides(panel: PanelModel, timeRange: TimeRange)
   }
 
   if (panel.timeShift) {
-    const timeShiftInterpolated = templateSrv.replace(panel.timeShift, panel.scopedVars);
+    const timeShiftInterpolated = getTemplateSrv().replace(panel.timeShift, panel.scopedVars);
     const timeShiftInfo = rangeUtil.describeTextRange(timeShiftInterpolated);
     if (timeShiftInfo.invalid) {
       newTimeData.timeInfo = 'invalid timeshift';
@@ -142,12 +155,15 @@ export function applyPanelTimeOverrides(panel: PanelModel, timeRange: TimeRange)
 
     const timeShift = '-' + timeShiftInterpolated;
     newTimeData.timeInfo += ' timeshift ' + timeShift;
+    const from = dateMath.parseDateMath(timeShift, newTimeData.timeRange.from, false)!;
+    const to = dateMath.parseDateMath(timeShift, newTimeData.timeRange.to, true)!;
+
     newTimeData.timeRange = {
-      from: dateMath.parseDateMath(timeShift, timeRange.from, false),
-      to: dateMath.parseDateMath(timeShift, timeRange.to, true),
+      from,
+      to,
       raw: {
-        from: timeRange.from,
-        to: timeRange.to,
+        from,
+        to,
       },
     };
   }
@@ -164,4 +180,10 @@ export function getResolution(panel: PanelModel): number {
   const width = htmlEl.getBoundingClientRect().width; // https://stackoverflow.com/a/21454625
 
   return panel.maxDataPoints ? panel.maxDataPoints : Math.ceil(width * (panel.gridPos.w / 24));
+}
+
+export function calculateInnerPanelHeight(panel: PanelModel, containerHeight: number): number {
+  const chromePadding = panel.plugin && panel.plugin.noPadding ? 0 : config.theme.panelPadding * 2;
+  const headerHeight = panel.hasTitle() ? config.theme.panelHeaderHeight : 0;
+  return containerHeight - headerHeight - chromePadding - PANEL_BORDER;
 }

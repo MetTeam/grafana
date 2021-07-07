@@ -1,23 +1,29 @@
 // Jest Snapshot v1, https://goo.gl/fbAQLP
 
 exports[`Render should render action bar and datasources 1`] = `
-<div>
-  <PageHeader
-    model={Object {}}
-  />
-  <div
-    className="page-container page-body"
+<Page
+  navModel={
+    Object {
+      "main": Object {
+        "text": "Configuration",
+      },
+      "node": Object {
+        "text": "Data Sources",
+      },
+    }
+  }
+>
+  <PageContents
+    isLoading={false}
   >
-    <OrgActionBar
+    <PageActionBar
       key="action-bar"
-      layoutMode="grid"
       linkButton={
         Object {
           "href": "datasources/new",
           "title": "Add data source",
         }
       }
-      onSetLayoutMode={[Function]}
       searchQuery=""
       setSearchQuery={[Function]}
     />
@@ -119,45 +125,30 @@ exports[`Render should render action bar and datasources 1`] = `
             "url": "",
             "user": "",
           },
-          Object {
-            "access": "",
-            "basicAuth": false,
-            "database": "database-5",
-            "id": 5,
-            "isDefault": false,
-            "jsonData": Object {
-              "authType": "credentials",
-              "defaultRegion": "eu-west-2",
-            },
-            "name": "dataSource-5",
-            "orgId": 1,
-            "password": "",
-            "readOnly": false,
-            "type": "cloudwatch",
-            "typeLogoUrl": "public/app/plugins/datasource/cloudwatch/img/amazon-web-services.png",
-            "url": "",
-            "user": "",
-          },
         ]
       }
       key="list"
       layoutMode="grid"
     />
-  </div>
-</div>
+  </PageContents>
+</Page>
 `;
 
 exports[`Render should render component 1`] = `
-<div>
-  <PageHeader
-    model={Object {}}
+<Page
+  navModel={
+    Object {
+      "main": Object {
+        "text": "Configuration",
+      },
+      "node": Object {
+        "text": "Data Sources",
+      },
+    }
+  }
+>
+  <PageContents
+    isLoading={true}
   />
-  <div
-    className="page-container page-body"
-  >
-    <PageLoader
-      pageName="Data sources"
-    />
-  </div>
-</div>
+</Page>
 `;

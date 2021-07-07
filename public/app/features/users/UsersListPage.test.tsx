@@ -1,9 +1,11 @@
 import React from 'react';
 import { shallow } from 'enzyme';
-import { UsersListPage, Props } from './UsersListPage';
-import { Invitee, NavModel, OrgUser } from 'app/types';
-import { getMockUser } from './__mocks__/userMocks';
-import appEvents from '../../core/app_events';
+import { Props, UsersListPage } from './UsersListPage';
+import { Invitee, OrgUser } from 'app/types';
+// import { getMockUser } from './__mocks__/userMocks';
+import { NavModel } from '@grafana/data';
+import { mockToolkitActionCreator } from 'test/core/redux/mocks';
+import { setUsersSearchPage, setUsersSearchQuery } from './state/reducers';
 
 jest.mock('../../core/app_events', () => ({
   emit: jest.fn(),
@@ -11,16 +13,25 @@ jest.mock('../../core/app_events', () => ({
 
 const setup = (propOverrides?: object) => {
   const props: Props = {
-    navModel: {} as NavModel,
+    navModel: {
+      main: {
+        text: 'Configuration',
+      },
+      node: {
+        text: 'Users',
+      },
+    } as NavModel,
     users: [] as OrgUser[],
     invitees: [] as Invitee[],
     searchQuery: '',
+    searchPage: 1,
     externalUserMngInfo: '',
     loadInvitees: jest.fn(),
     loadUsers: jest.fn(),
     updateUser: jest.fn(),
     removeUser: jest.fn(),
-    setUsersSearchQuery: jest.fn(),
+    setUsersSearchQuery: mockToolkitActionCreator(setUsersSearchQuery),
+    setUsersSearchPage: mockToolkitActionCreator(setUsersSearchPage),
     hasFetched: false,
   };
 
@@ -48,16 +59,5 @@ describe('Render', () => {
     });
 
     expect(wrapper).toMatchSnapshot();
-  });
-});
-
-describe('Functions', () => {
-  it('should emit show remove user modal', () => {
-    const { instance } = setup();
-    const mockUser = getMockUser();
-
-    instance.onRemoveUser(mockUser);
-
-    expect(appEvents.emit).toHaveBeenCalled();
   });
 });

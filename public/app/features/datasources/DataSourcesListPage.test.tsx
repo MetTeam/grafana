@@ -1,20 +1,28 @@
 import React from 'react';
 import { shallow } from 'enzyme';
+import { DataSourceSettings, NavModel, LayoutModes } from '@grafana/data';
+
 import { DataSourcesListPage, Props } from './DataSourcesListPage';
-import { DataSource, NavModel } from 'app/types';
-import { LayoutModes } from '../../core/components/LayoutSelector/LayoutSelector';
 import { getMockDataSources } from './__mocks__/dataSourcesMocks';
+import { setDataSourcesLayoutMode, setDataSourcesSearchQuery } from './state/reducers';
 
 const setup = (propOverrides?: object) => {
   const props: Props = {
-    dataSources: [] as DataSource[],
+    dataSources: [] as DataSourceSettings[],
     layoutMode: LayoutModes.Grid,
     loadDataSources: jest.fn(),
-    navModel: {} as NavModel,
+    navModel: {
+      main: {
+        text: 'Configuration',
+      },
+      node: {
+        text: 'Data Sources',
+      },
+    } as NavModel,
     dataSourcesCount: 0,
     searchQuery: '',
-    setDataSourcesSearchQuery: jest.fn(),
-    setDataSourcesLayoutMode: jest.fn(),
+    setDataSourcesSearchQuery,
+    setDataSourcesLayoutMode,
     hasFetched: false,
   };
 

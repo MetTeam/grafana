@@ -53,16 +53,5 @@
 }
 
 .pluginlist-emphasis {
-  font-weight: 600;
-}
-
-.pluginlist-none-installed {
-  color: $text-color-weak;
-  font-size: $font-size-sm;
-}
-
-.pluginlist-inline-logo {
-  vertical-align: sub;
-  margin-right: $spacer / 3;
-  width: 16px;
+  font-weight: $font-weight-semi-bold;
 }

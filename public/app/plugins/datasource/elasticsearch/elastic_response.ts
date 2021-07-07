@@ -1,28 +1,46 @@
-import _ from 'lodash';
+import { clone, filter, find, identity, isArray, keys, map, uniq, values as _values } from 'lodash';
+import flatten from 'app/core/utils/flatten';
 import * as queryDef from './query_def';
 import TableModel from 'app/core/table_model';
+import {
+  DataQueryResponse,
+  DataFrame,
+  toDataFrame,
+  FieldType,
+  MutableDataFrame,
+  PreferredVisualisationType,
+} from '@grafana/data';
+import { ElasticsearchAggregation, ElasticsearchQuery } from './types';
+import {
+  ExtendedStatMetaType,
+  isMetricAggregationWithField,
+} from './components/QueryEditor/MetricAggregationsEditor/aggregations';
+import { describeMetric, getScriptValue } from './utils';
+import { metricAggregationConfig } from './components/QueryEditor/MetricAggregationsEditor/utils';
+
+const HIGHLIGHT_TAGS_EXP = `${queryDef.highlightTags.pre}([^@]+)${queryDef.highlightTags.post}`;
 
 export class ElasticResponse {
-  constructor(private targets, private response) {
+  constructor(private targets: ElasticsearchQuery[], private response: any) {
     this.targets = targets;
     this.response = response;
   }
 
-  processMetrics(esAgg, target, seriesList, props) {
-    let metric, y, i, newSeries, bucket, value;
+  processMetrics(esAgg: any, target: ElasticsearchQuery, seriesList: any, props: any) {
+    let newSeries: any;
 
-    for (y = 0; y < target.metrics.length; y++) {
-      metric = target.metrics[y];
+    for (let y = 0; y < target.metrics!.length; y++) {
+      const metric = target.metrics![y];
       if (metric.hide) {
         continue;
       }
 
       switch (metric.type) {
         case 'count': {
-          newSeries = { datapoints: [], metric: 'count', props: props };
-          for (i = 0; i < esAgg.buckets.length; i++) {
-            bucket = esAgg.buckets[i];
-            value = bucket.doc_count;
+          newSeries = { datapoints: [], metric: 'count', props, refId: target.refId };
+          for (let i = 0; i < esAgg.buckets.length; i++) {
+            const bucket = esAgg.buckets[i];
+            const value = bucket.doc_count;
             newSeries.datapoints.push([value, bucket.key]);
           }
           seriesList.push(newSeries);
@@ -42,10 +60,11 @@ export class ElasticResponse {
               metric: 'p' + percentileName,
               props: props,
               field: metric.field,
+              refId: target.refId,
             };
 
-            for (i = 0; i < esAgg.buckets.length; i++) {
-              bucket = esAgg.buckets[i];
+            for (let i = 0; i < esAgg.buckets.length; i++) {
+              const bucket = esAgg.buckets[i];
               const values = bucket[metric.id].values;
               newSeries.datapoints.push([values[percentileName], bucket.key]);
             }
@@ -56,7 +75,7 @@ export class ElasticResponse {
         }
         case 'extended_stats': {
           for (const statName in metric.meta) {
-            if (!metric.meta[statName]) {
+            if (!metric.meta[statName as ExtendedStatMetaType]) {
               continue;
             }
 
@@ -65,10 +84,11 @@ export class ElasticResponse {
               metric: statName,
               props: props,
               field: metric.field,
+              refId: target.refId,
             };
 
-            for (i = 0; i < esAgg.buckets.length; i++) {
-              bucket = esAgg.buckets[i];
+            for (let i = 0; i < esAgg.buckets.length; i++) {
+              const bucket = esAgg.buckets[i];
               const stats = bucket[metric.id];
 
               // add stats that are in nested obj to top level obj
@@ -87,13 +107,19 @@ export class ElasticResponse {
           newSeries = {
             datapoints: [],
             metric: metric.type,
-            field: metric.field,
+            metricId: metric.id,
             props: props,
+            refId: target.refId,
           };
-          for (i = 0; i < esAgg.buckets.length; i++) {
-            bucket = esAgg.buckets[i];
 
-            value = bucket[metric.id];
+          if (isMetricAggregationWithField(metric)) {
+            newSeries.field = metric.field;
+          }
+
+          for (let i = 0; i < esAgg.buckets.length; i++) {
+            const bucket = esAgg.buckets[i];
+            const value = bucket[metric.id];
+
             if (value !== undefined) {
               if (value.normalized_value) {
                 newSeries.datapoints.push([value.normalized_value, bucket.key]);
@@ -109,32 +135,38 @@ export class ElasticResponse {
     }
   }
 
-  processAggregationDocs(esAgg, aggDef, target, table, props) {
+  processAggregationDocs(
+    esAgg: any,
+    aggDef: ElasticsearchAggregation,
+    target: ElasticsearchQuery,
+    table: any,
+    props: any
+  ) {
     // add columns
     if (table.columns.length === 0) {
-      for (const propKey of _.keys(props)) {
+      for (const propKey of keys(props)) {
         table.addColumn({ text: propKey, filterable: true });
       }
       table.addColumn({ text: aggDef.field, filterable: true });
     }
 
     // helper func to add values to value array
-    const addMetricValue = (values, metricName, value) => {
+    const addMetricValue = (values: any[], metricName: string, value: any) => {
       table.addColumn({ text: metricName });
       values.push(value);
     };
-
-    for (const bucket of esAgg.buckets) {
+    const buckets = isArray(esAgg.buckets) ? esAgg.buckets : [esAgg.buckets];
+    for (const bucket of buckets) {
       const values = [];
 
-      for (const propValues of _.values(props)) {
+      for (const propValues of _values(props)) {
         values.push(propValues);
       }
 
       // add bucket key (value)
       values.push(bucket.key);
 
-      for (const metric of target.metrics) {
+      for (const metric of target.metrics || []) {
         switch (metric.type) {
           case 'count': {
             addMetricValue(values, this.getMetricName(metric.type), bucket.doc_count);
@@ -142,7 +174,7 @@ export class ElasticResponse {
           }
           case 'extended_stats': {
             for (const statName in metric.meta) {
-              if (!metric.meta[statName]) {
+              if (!metric.meta[statName as ExtendedStatMetaType]) {
                 continue;
               }
 
@@ -151,17 +183,32 @@ export class ElasticResponse {
               stats.std_deviation_bounds_upper = stats.std_deviation_bounds.upper;
               stats.std_deviation_bounds_lower = stats.std_deviation_bounds.lower;
 
-              addMetricValue(values, this.getMetricName(statName), stats[statName]);
+              addMetricValue(values, this.getMetricName(statName as ExtendedStatMetaType), stats[statName]);
+            }
+            break;
+          }
+          case 'percentiles': {
+            const percentiles = bucket[metric.id].values;
+
+            for (const percentileName in percentiles) {
+              addMetricValue(values, `p${percentileName} ${metric.field}`, percentiles[percentileName]);
             }
             break;
           }
           default: {
             let metricName = this.getMetricName(metric.type);
-            const otherMetrics = _.filter(target.metrics, { type: metric.type });
+            const otherMetrics = filter(target.metrics, { type: metric.type });
 
             // if more of the same metric type include field field name in property
             if (otherMetrics.length > 1) {
-              metricName += ' ' + metric.field;
+              if (isMetricAggregationWithField(metric)) {
+                metricName += ' ' + metric.field;
+              }
+
+              if (metric.type === 'bucket_script') {
+                //Use the formula in the column name
+                metricName = getScriptValue(metric);
+              }
             }
 
             addMetricValue(values, metricName, bucket[metric.id].value);
@@ -175,13 +222,13 @@ export class ElasticResponse {
   }
 
   // This is quite complex
-  // need to recurise down the nested buckets to build series
-  processBuckets(aggs, target, seriesList, table, props, depth) {
-    let bucket, aggDef, esAgg, aggId;
-    const maxDepth = target.bucketAggs.length - 1;
+  // need to recurse down the nested buckets to build series
+  processBuckets(aggs: any, target: ElasticsearchQuery, seriesList: any, table: TableModel, props: any, depth: number) {
+    let bucket, aggDef: any, esAgg, aggId;
+    const maxDepth = target.bucketAggs!.length - 1;
 
     for (aggId in aggs) {
-      aggDef = _.find(target.bucketAggs, { id: aggId });
+      aggDef = find(target.bucketAggs, { id: aggId });
       esAgg = aggs[aggId];
 
       if (!aggDef) {
@@ -197,7 +244,7 @@ export class ElasticResponse {
       } else {
         for (const nameIndex in esAgg.buckets) {
           bucket = esAgg.buckets[nameIndex];
-          props = _.clone(props);
+          props = clone(props);
           if (bucket.key !== void 0) {
             props[aggDef.field] = bucket.key;
           } else {
@@ -212,22 +259,30 @@ export class ElasticResponse {
     }
   }
 
-  private getMetricName(metric) {
-    let metricDef = _.find(queryDef.metricAggTypes, { value: metric });
-    if (!metricDef) {
-      metricDef = _.find(queryDef.extendedStats, { value: metric });
+  private getMetricName(metric: string): string {
+    const metricDef = Object.entries(metricAggregationConfig)
+      .filter(([key]) => key === metric)
+      .map(([_, value]) => value)[0];
+
+    if (metricDef) {
+      return metricDef.label;
     }
 
-    return metricDef ? metricDef.text : metric;
+    const extendedStat = queryDef.extendedStats.find((e) => e.value === metric);
+    if (extendedStat) {
+      return extendedStat.label;
+    }
+
+    return metric;
   }
 
-  private getSeriesName(series, target, metricTypeCount) {
+  private getSeriesName(series: any, target: ElasticsearchQuery, metricTypeCount: any) {
     let metricName = this.getMetricName(series.metric);
 
     if (target.alias) {
       const regex = /\{\{([\s\S]+?)\}\}/g;
 
-      return target.alias.replace(regex, (match, g1, g2) => {
+      return target.alias.replace(regex, (match: any, g1: any, g2: any) => {
         const group = g1 || g2;
 
         if (group.indexOf('term ') === 0) {
@@ -240,25 +295,41 @@ export class ElasticResponse {
           return metricName;
         }
         if (group === 'field') {
-          return series.field;
+          return series.field || '';
         }
 
         return match;
       });
     }
 
-    if (series.field && queryDef.isPipelineAgg(series.metric)) {
-      const appliedAgg = _.find(target.metrics, { id: series.field });
-      if (appliedAgg) {
-        metricName += ' ' + queryDef.describeMetric(appliedAgg);
+    if (queryDef.isPipelineAgg(series.metric)) {
+      if (series.metric && queryDef.isPipelineAggWithMultipleBucketPaths(series.metric)) {
+        const agg: any = find(target.metrics, { id: series.metricId });
+        if (agg && agg.settings.script) {
+          metricName = getScriptValue(agg);
+
+          for (const pv of agg.pipelineVariables) {
+            const appliedAgg: any = find(target.metrics, { id: pv.pipelineAgg });
+            if (appliedAgg) {
+              metricName = metricName.replace('params.' + pv.name, describeMetric(appliedAgg));
+            }
+          }
+        } else {
+          metricName = 'Unset';
+        }
       } else {
-        metricName = 'Unset';
+        const appliedAgg: any = find(target.metrics, { id: series.field });
+        if (appliedAgg) {
+          metricName += ' ' + describeMetric(appliedAgg);
+        } else {
+          metricName = 'Unset';
+        }
       }
     } else if (series.field) {
       metricName += ' ' + series.field;
     }
 
-    const propKeys = _.keys(series.props);
+    const propKeys = keys(series.props);
     if (propKeys.length === 0) {
       return metricName;
     }
@@ -275,8 +346,8 @@ export class ElasticResponse {
     return name.trim() + ' ' + metricName;
   }
 
-  nameSeries(seriesList, target) {
-    const metricTypeCount = _.uniq(_.map(seriesList, 'metric')).length;
+  nameSeries(seriesList: any, target: ElasticsearchQuery) {
+    const metricTypeCount = uniq(map(seriesList, 'metric')).length;
 
     for (let i = 0; i < seriesList.length; i++) {
       const series = seriesList[i];
@@ -284,15 +355,18 @@ export class ElasticResponse {
     }
   }
 
-  processHits(hits, seriesList) {
-    const series = {
-      target: 'docs',
+  processHits(hits: { total: { value: any }; hits: any[] }, seriesList: any[], target: ElasticsearchQuery) {
+    const hitsTotal = typeof hits.total === 'number' ? hits.total : hits.total.value; // <- Works with Elasticsearch 7.0+
+
+    const series: any = {
+      target: target.refId,
       type: 'docs',
+      refId: target.refId,
       datapoints: [],
-      total: hits.total,
+      total: hitsTotal,
       filterable: true,
     };
-    let propName, hit, doc, i;
+    let propName, hit, doc: any, i;
 
     for (i = 0; i < hits.hits.length; i++) {
       hit = hits.hits[i];
@@ -300,6 +374,8 @@ export class ElasticResponse {
         _id: hit._id,
         _type: hit._type,
         _index: hit._index,
+        sort: hit.sort,
+        highlight: hit.highlight,
       };
 
       if (hit._source) {
@@ -317,8 +393,8 @@ export class ElasticResponse {
     seriesList.push(series);
   }
 
-  trimDatapoints(aggregations, target) {
-    const histogram = _.find(target.bucketAggs, { type: 'date_histogram' });
+  trimDatapoints(aggregations: any, target: ElasticsearchQuery) {
+    const histogram: any = find(target.bucketAggs, { type: 'date_histogram' });
 
     const shouldDropFirstAndLast = histogram && histogram.settings && histogram.settings.trimEdges;
     if (shouldDropFirstAndLast) {
@@ -332,13 +408,13 @@ export class ElasticResponse {
     }
   }
 
-  getErrorFromElasticResponse(response, err) {
+  getErrorFromElasticResponse(response: any, err: any) {
     const result: any = {};
     result.data = JSON.stringify(err, null, 4);
     if (err.root_cause && err.root_cause.length > 0 && err.root_cause[0].reason) {
       result.message = err.root_cause[0].reason;
     } else {
-      result.message = err.reason || 'Unkown elastic error response';
+      result.message = err.reason || 'Unknown elastic error response';
     }
 
     if (response.$$config) {
@@ -349,23 +425,142 @@ export class ElasticResponse {
   }
 
   getTimeSeries() {
-    const seriesList = [];
+    if (this.targets.some((target) => queryDef.hasMetricOfType(target, 'raw_data'))) {
+      return this.processResponseToDataFrames(false);
+    }
+    return this.processResponseToSeries();
+  }
 
-    for (let i = 0; i < this.response.responses.length; i++) {
-      const response = this.response.responses[i];
+  getLogs(logMessageField?: string, logLevelField?: string): DataQueryResponse {
+    return this.processResponseToDataFrames(true, logMessageField, logLevelField);
+  }
+
+  processResponseToDataFrames(
+    isLogsRequest: boolean,
+    logMessageField?: string,
+    logLevelField?: string
+  ): DataQueryResponse {
+    const dataFrame: DataFrame[] = [];
+    for (let n = 0; n < this.response.responses.length; n++) {
+      const response = this.response.responses[n];
       if (response.error) {
         throw this.getErrorFromElasticResponse(this.response, response.error);
       }
 
       if (response.hits && response.hits.hits.length > 0) {
-        this.processHits(response.hits, seriesList);
+        const { propNames, docs } = flattenHits(response.hits.hits);
+        if (docs.length > 0) {
+          let series = createEmptyDataFrame(
+            propNames.map(toNameTypePair(docs)),
+            this.targets[0].timeField!,
+            isLogsRequest,
+            logMessageField,
+            logLevelField
+          );
+
+          // Add a row for each document
+          for (const doc of docs) {
+            if (logLevelField) {
+              // Remap level field based on the datasource config. This field is
+              // then used in explore to figure out the log level. We may rewrite
+              // some actual data in the level field if they are different.
+              doc['level'] = doc[logLevelField];
+            }
+            // When highlighting exists, we need to collect all the highlighted
+            // phrases and add them to the DataFrame's meta.searchWords array.
+            if (doc.highlight) {
+              // There might be multiple words so we need two versions of the
+              // regular expression. One to match gobally, when used with part.match,
+              // it returns and array of matches. The second one is used to capture the
+              // values between the tags.
+              const globalHighlightWordRegex = new RegExp(HIGHLIGHT_TAGS_EXP, 'g');
+              const highlightWordRegex = new RegExp(HIGHLIGHT_TAGS_EXP);
+              const newSearchWords = Object.keys(doc.highlight)
+                .flatMap((key) => {
+                  return doc.highlight[key].flatMap((line: string) => {
+                    const matchedPhrases = line.match(globalHighlightWordRegex);
+                    if (!matchedPhrases) {
+                      return [];
+                    }
+                    return matchedPhrases.map((part) => {
+                      const matches = part.match(highlightWordRegex);
+                      return (matches && matches[1]) || null;
+                    });
+                  });
+                })
+                .filter(identity);
+              // If meta and searchWords already exists, add the words and
+              // deduplicate otherwise create a new set of search words.
+              const searchWords = series.meta?.searchWords
+                ? uniq([...series.meta.searchWords, ...newSearchWords])
+                : [...newSearchWords];
+              series.meta = series.meta ? { ...series.meta, searchWords } : { searchWords };
+            }
+            series.add(doc);
+          }
+          if (isLogsRequest) {
+            series = addPreferredVisualisationType(series, 'logs');
+          }
+          const target = this.targets[n];
+          series.refId = target.refId;
+          dataFrame.push(series);
+        }
+      }
+
+      if (response.aggregations) {
+        const aggregations = response.aggregations;
+        const target = this.targets[n];
+        const tmpSeriesList: any[] = [];
+        const table = new TableModel();
+
+        this.processBuckets(aggregations, target, tmpSeriesList, table, {}, 0);
+        this.trimDatapoints(tmpSeriesList, target);
+        this.nameSeries(tmpSeriesList, target);
+
+        if (table.rows.length > 0) {
+          const series = toDataFrame(table);
+          series.refId = target.refId;
+          dataFrame.push(series);
+        }
+
+        for (let y = 0; y < tmpSeriesList.length; y++) {
+          let series = toDataFrame(tmpSeriesList[y]);
+
+          // When log results, show aggregations only in graph. Log fields are then going to be shown in table.
+          if (isLogsRequest) {
+            series = addPreferredVisualisationType(series, 'graph');
+          }
+
+          series.refId = target.refId;
+          dataFrame.push(series);
+        }
+      }
+    }
+
+    return { data: dataFrame };
+  }
+
+  processResponseToSeries = () => {
+    const seriesList = [];
+
+    for (let i = 0; i < this.response.responses.length; i++) {
+      const response = this.response.responses[i];
+      const target = this.targets[i];
+
+      if (response.error) {
+        throw this.getErrorFromElasticResponse(this.response, response.error);
+      }
+
+      if (response.hits && response.hits.hits.length > 0) {
+        this.processHits(response.hits, seriesList, target);
       }
 
       if (response.aggregations) {
         const aggregations = response.aggregations;
         const target = this.targets[i];
-        const tmpSeriesList = [];
+        const tmpSeriesList: any[] = [];
         const table = new TableModel();
+        table.refId = target.refId;
 
         this.processBuckets(aggregations, target, tmpSeriesList, table, {}, 0);
         this.trimDatapoints(tmpSeriesList, target);
@@ -382,5 +577,151 @@ export class ElasticResponse {
     }
 
     return { data: seriesList };
-  }
+  };
 }
+
+type Doc = {
+  _id: string;
+  _type: string;
+  _index: string;
+  _source?: any;
+  sort?: Array<string | number>;
+  highlight?: Record<string, string[]>;
+};
+
+/**
+ * Flatten the docs from response mainly the _source part which can be nested. This flattens it so that it is one level
+ * deep and the keys are: `level1Name.level2Name...`. Also returns list of all properties from all the docs (not all
+ * docs have to have the same keys).
+ * @param hits
+ */
+const flattenHits = (hits: Doc[]): { docs: Array<Record<string, any>>; propNames: string[] } => {
+  const docs: any[] = [];
+  // We keep a list of all props so that we can create all the fields in the dataFrame, this can lead
+  // to wide sparse dataframes in case the scheme is different per document.
+  let propNames: string[] = [];
+
+  for (const hit of hits) {
+    const flattened = hit._source ? flatten(hit._source) : {};
+    const doc = {
+      _id: hit._id,
+      _type: hit._type,
+      _index: hit._index,
+      sort: hit.sort,
+      highlight: hit.highlight,
+      _source: { ...flattened },
+      ...flattened,
+    };
+
+    for (const propName of Object.keys(doc)) {
+      if (propNames.indexOf(propName) === -1) {
+        propNames.push(propName);
+      }
+    }
+
+    docs.push(doc);
+  }
+
+  propNames.sort();
+  return { docs, propNames };
+};
+
+/**
+ * Create empty dataframe but with created fields. Fields are based from propNames (should be from the response) and
+ * also from configuration specified fields for message, time, and level.
+ * @param propNames
+ * @param timeField
+ * @param logMessageField
+ * @param logLevelField
+ */
+const createEmptyDataFrame = (
+  props: Array<[string, FieldType]>,
+  timeField: string,
+  isLogsRequest: boolean,
+  logMessageField?: string,
+  logLevelField?: string
+): MutableDataFrame => {
+  const series = new MutableDataFrame({ fields: [] });
+
+  series.addField({
+    config: {
+      filterable: true,
+    },
+    name: timeField,
+    type: FieldType.time,
+  });
+
+  if (logMessageField) {
+    series.addField({
+      name: logMessageField,
+      type: FieldType.string,
+    }).parse = (v: any) => {
+      return v || '';
+    };
+  }
+
+  if (logLevelField) {
+    series.addField({
+      name: 'level',
+      type: FieldType.string,
+    }).parse = (v: any) => {
+      return v || '';
+    };
+  }
+
+  const fieldNames = series.fields.map((field) => field.name);
+
+  for (const [name, type] of props) {
+    // Do not duplicate fields. This can mean that we will shadow some fields.
+    if (fieldNames.includes(name)) {
+      continue;
+    }
+    // Do not add _source field (besides logs) as we are showing each _source field in table instead.
+    if (!isLogsRequest && name === '_source') {
+      continue;
+    }
+
+    series.addField({
+      config: {
+        filterable: true,
+      },
+      name,
+      type,
+    }).parse = (v: any) => {
+      return v || '';
+    };
+  }
+
+  return series;
+};
+
+const addPreferredVisualisationType = (series: any, type: PreferredVisualisationType) => {
+  let s = series;
+  s.meta
+    ? (s.meta.preferredVisualisationType = type)
+    : (s.meta = {
+        preferredVisualisationType: type,
+      });
+
+  return s;
+};
+
+const toNameTypePair = (docs: Array<Record<string, any>>) => (propName: string): [string, FieldType] => [
+  propName,
+  guessType(docs.find((doc) => doc[propName] !== undefined)?.[propName]),
+];
+
+/**
+ * Trying to guess data type from its value. This is far from perfect, as in order to have accurate guess
+ * we should have access to the elasticsearch mapping, but it covers the most common use cases for numbers, strings & arrays.
+ */
+const guessType = (value: unknown): FieldType => {
+  switch (typeof value) {
+    case 'number':
+      return FieldType.number;
+    case 'string':
+      return FieldType.string;
+    default:
+      return FieldType.other;
+  }
+};

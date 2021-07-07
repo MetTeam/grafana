@@ -1,20 +1,20 @@
-import _ from 'lodash';
-import moment from 'moment';
+import { each, filter, keys } from 'lodash';
 import tinycolor from 'tinycolor2';
-import { MetricsPanelCtrl } from 'app/plugins/sdk';
-import { AnnotationEvent } from './event';
 import {
-  OK_COLOR,
   ALERTING_COLOR,
-  NO_DATA_COLOR,
-  PENDING_COLOR,
   DEFAULT_ANNOTATION_COLOR,
+  NO_DATA_COLOR,
+  OK_COLOR,
+  PENDING_COLOR,
   REGION_FILL_ALPHA,
-} from 'app/core/utils/colors';
+} from '@grafana/ui';
+import { MetricsPanelCtrl } from '../panel/metrics_panel_ctrl';
+
+import { AnnotationEvent } from '@grafana/data';
 
 export class EventManager {
-  event: AnnotationEvent;
-  editorOpen: boolean;
+  event: AnnotationEvent | null = null;
+  editorOpen = false;
 
   constructor(private panelCtrl: MetricsPanelCtrl) {}
 
@@ -28,35 +28,36 @@ export class EventManager {
     this.editorOpen = true;
   }
 
-  updateTime(range) {
+  updateTime(range: { from: any; to: any }) {
     if (!this.event) {
-      this.event = new AnnotationEvent();
+      this.event = {};
       this.event.dashboardId = this.panelCtrl.dashboard.id;
       this.event.panelId = this.panelCtrl.panel.id;
     }
 
     // update time
-    this.event.time = moment(range.from);
+    this.event.time = range.from;
     this.event.isRegion = false;
+
     if (range.to) {
-      this.event.timeEnd = moment(range.to);
+      this.event.timeEnd = range.to;
       this.event.isRegion = true;
     }
 
     this.panelCtrl.render();
   }
 
-  editEvent(event, elem?) {
+  editEvent(event: AnnotationEvent, elem?: any) {
     this.event = event;
     this.panelCtrl.render();
   }
 
-  addFlotEvents(annotations, flotOptions) {
+  addFlotEvents(annotations: any, flotOptions: any) {
     if (!this.event && annotations.length === 0) {
       return;
     }
 
-    const types = {
+    const types: any = {
       $__alerting: {
         color: ALERTING_COLOR,
         position: 'BOTTOM',
@@ -89,8 +90,8 @@ export class EventManager {
         annotations = [
           {
             isRegion: true,
-            min: this.event.time.valueOf(),
-            timeEnd: this.event.timeEnd.valueOf(),
+            min: this.event.time,
+            timeEnd: this.event.timeEnd,
             text: this.event.text,
             eventType: '$__editing',
             editModel: this.event,
@@ -99,7 +100,7 @@ export class EventManager {
       } else {
         annotations = [
           {
-            min: this.event.time.valueOf(),
+            min: this.event.time,
             text: this.event.text,
             editModel: this.event,
             eventType: '$__editing',
@@ -114,16 +115,16 @@ export class EventManager {
         // add properties used by jquery flot events
         item.min = item.time;
         item.max = item.time;
-        item.eventType = item.source.name;
+        item.eventType = item.type;
 
         if (item.newState) {
           item.eventType = '$__' + item.newState;
           continue;
         }
 
-        if (!types[item.source.name]) {
-          types[item.source.name] = {
-            color: item.source.iconColor,
+        if (!types[item.type]) {
+          types[item.type] = {
+            color: item.color,
             position: 'BOTTOM',
             markerSize: 5,
           };
@@ -140,7 +141,7 @@ export class EventManager {
     flotOptions.xaxis.eventSectionHeight = eventSectionHeight;
 
     flotOptions.events = {
-      levels: _.keys(types).length + 1,
+      levels: keys(types).length + 1,
       data: annotations,
       types: types,
       manager: this,
@@ -148,16 +149,16 @@ export class EventManager {
   }
 }
 
-function getRegions(events) {
-  return _.filter(events, 'isRegion');
+function getRegions(events: AnnotationEvent[]) {
+  return filter(events, 'isRegion');
 }
 
-function addRegionMarking(regions, flotOptions) {
+function addRegionMarking(regions: any[], flotOptions: { grid: { markings: any } }) {
   const markings = flotOptions.grid.markings;
   const defaultColor = DEFAULT_ANNOTATION_COLOR;
   let fillColor;
 
-  _.each(regions, region => {
+  each(regions, (region) => {
     if (region.source) {
       fillColor = region.source.iconColor || defaultColor;
     } else {

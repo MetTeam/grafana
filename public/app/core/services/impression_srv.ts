@@ -1,21 +1,21 @@
 import store from 'app/core/store';
-import _ from 'lodash';
+import { filter, isArray, isNumber } from 'lodash';
 import config from 'app/core/config';
 
 export class ImpressionSrv {
   constructor() {}
 
-  addDashboardImpression(dashboardId) {
-    const impressionsKey = this.impressionKey(config);
+  addDashboardImpression(dashboardId: number) {
+    const impressionsKey = this.impressionKey();
     let impressions = [];
     if (store.exists(impressionsKey)) {
       impressions = JSON.parse(store.get(impressionsKey));
-      if (!_.isArray(impressions)) {
+      if (!isArray(impressions)) {
         impressions = [];
       }
     }
 
-    impressions = impressions.filter(imp => {
+    impressions = impressions.filter((imp) => {
       return dashboardId !== imp;
     });
 
@@ -28,18 +28,18 @@ export class ImpressionSrv {
   }
 
   getDashboardOpened() {
-    let impressions = store.get(this.impressionKey(config)) || '[]';
+    let impressions = store.get(this.impressionKey()) || '[]';
 
     impressions = JSON.parse(impressions);
 
-    impressions = _.filter(impressions, el => {
-      return _.isNumber(el);
+    impressions = filter(impressions, (el) => {
+      return isNumber(el);
     });
 
     return impressions;
   }
 
-  impressionKey(config) {
+  impressionKey() {
     return 'dashboard_impressions-' + config.bootData.user.orgId;
   }
 }

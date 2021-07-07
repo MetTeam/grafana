@@ -1,9 +1,10 @@
-import moment from 'moment';
 import { GraphCtrl } from '../module';
+import { dateTime } from '@grafana/data';
+import TimeSeries from 'app/core/time_series2';
 
 jest.mock('../graph', () => ({}));
 
-describe('GraphCtrl', () => {
+describe.skip('GraphCtrl', () => {
   const injector = {
     get: () => {
       return {
@@ -17,27 +18,35 @@ describe('GraphCtrl', () => {
     },
   };
 
-  const scope = {
-    $on: () => {},
-  };
-
   GraphCtrl.prototype.panel = {
     events: {
       on: () => {},
+      emit: () => {},
     },
     gridPos: {
       w: 100,
+    },
+    fieldConfig: {
+      defaults: {},
+    },
+  };
+
+  const scope: any = {
+    $on: () => {},
+    $parent: {
+      panel: GraphCtrl.prototype.panel,
+      dashboard: {},
     },
   };
 
   const ctx = {} as any;
 
   beforeEach(() => {
-    ctx.ctrl = new GraphCtrl(scope, injector, {});
+    ctx.ctrl = new GraphCtrl(scope, injector as any);
     ctx.ctrl.events = {
       emit: () => {},
     };
-    ctx.ctrl.annotationsPromise = Promise.resolve({});
+    ctx.ctrl.panelData = {};
     ctx.ctrl.updateTimeRange();
   });
 
@@ -46,52 +55,95 @@ describe('GraphCtrl', () => {
       const data = [
         {
           target: 'test.cpu1',
-          datapoints: [[45, 1234567890], [60, 1234567899]],
+          datapoints: [
+            [45, 1234567890],
+            [60, 1234567899],
+          ],
         },
       ];
 
-      ctx.ctrl.range = { from: moment().valueOf(), to: moment().valueOf() };
-      ctx.ctrl.onDataReceived(data);
+      ctx.ctrl.range = { from: dateTime().valueOf(), to: dateTime().valueOf() };
+      ctx.ctrl.onDataSnapshotLoad(data);
     });
 
     it('should set datapointsOutside', () => {
-      expect(ctx.ctrl.dataWarning.title).toBe('Data points outside time range');
+      expect(ctx.ctrl.dataWarning.title).toBe('Data outside time range');
     });
   });
 
   describe('when time series are inside range', () => {
     beforeEach(() => {
       const range = {
-        from: moment()
-          .subtract(1, 'days')
-          .valueOf(),
-        to: moment().valueOf(),
+        from: dateTime().subtract(1, 'days').valueOf(),
+        to: dateTime().valueOf(),
       };
 
       const data = [
         {
           target: 'test.cpu1',
-          datapoints: [[45, range.from + 1000], [60, range.from + 10000]],
+          datapoints: [
+            [45, range.from + 1000],
+            [60, range.from + 10000],
+          ],
         },
       ];
 
       ctx.ctrl.range = range;
-      ctx.ctrl.onDataReceived(data);
+      ctx.ctrl.onDataSnapshotLoad(data);
     });
 
     it('should set datapointsOutside', () => {
-      expect(ctx.ctrl.dataWarning).toBe(null);
+      expect(ctx.ctrl.dataWarning).toBeUndefined();
     });
   });
 
   describe('datapointsCount given 2 series', () => {
     beforeEach(() => {
-      const data = [{ target: 'test.cpu1', datapoints: [] }, { target: 'test.cpu2', datapoints: [] }];
-      ctx.ctrl.onDataReceived(data);
+      const data: any = [
+        { target: 'test.cpu1', datapoints: [] },
+        { target: 'test.cpu2', datapoints: [] },
+      ];
+      ctx.ctrl.onDataSnapshotLoad(data);
     });
 
     it('should set datapointsCount warning', () => {
-      expect(ctx.ctrl.dataWarning.title).toBe('No data points');
+      expect(ctx.ctrl.dataWarning.title).toBe('No data');
+    });
+  });
+
+  describe('when data is exported to CSV', () => {
+    const appEventMock = jest.fn();
+
+    beforeEach(() => {
+      appEventMock.mockReset();
+      scope.$root = { appEvent: appEventMock };
+      scope.$new = () => ({});
+      const data = [
+        {
+          target: 'test.normal',
+          datapoints: [
+            [10, 1],
+            [10, 2],
+          ],
+        },
+        {
+          target: 'test.nulls',
+          datapoints: [
+            [null, 1],
+            [null, 2],
+          ],
+        },
+        {
+          target: 'test.zeros',
+          datapoints: [
+            [0, 1],
+            [0, 2],
+          ],
+        },
+      ];
+      ctx.ctrl.onDataSnapshotLoad(data);
+      // allIsNull / allIsZero are set by getFlotPairs
+      ctx.ctrl.seriesList.forEach((series: TimeSeries) => series.getFlotPairs(''));
     });
   });
 });

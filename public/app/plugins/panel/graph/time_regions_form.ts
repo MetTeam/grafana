@@ -4,14 +4,16 @@ import { getColorModes } from './time_region_manager';
 export class TimeRegionFormCtrl {
   panelCtrl: any;
   panel: any;
-  disabled: boolean;
+  disabled = false;
   colorModes: any;
 
   /** @ngInject */
-  constructor($scope) {
+  constructor(private $scope: any) {}
+
+  $onInit() {
     this.panel = this.panelCtrl.panel;
 
-    const unbindDestroy = $scope.$on('$destroy', () => {
+    const unbindDestroy = this.$scope.$on('$destroy', () => {
       this.panelCtrl.editingTimeRegions = false;
       this.panelCtrl.render();
       unbindDestroy();
@@ -35,24 +37,27 @@ export class TimeRegionFormCtrl {
       colorMode: 'background6',
       fill: true,
       line: false,
+      // Default colors for new
+      fillColor: 'rgba(234, 112, 112, 0.12)',
+      lineColor: 'rgba(237, 46, 24, 0.60)',
     });
     this.panelCtrl.render();
   }
 
-  removeTimeRegion(index) {
+  removeTimeRegion(index: number) {
     this.panel.timeRegions.splice(index, 1);
     this.panelCtrl.render();
   }
 
-  onFillColorChange(index) {
-    return newColor => {
+  onFillColorChange(index: number) {
+    return (newColor: string) => {
       this.panel.timeRegions[index].fillColor = newColor;
       this.render();
     };
   }
 
-  onLineColorChange(index) {
-    return newColor => {
+  onLineColorChange(index: number) {
+    return (newColor: string) => {
       this.panel.timeRegions[index].lineColor = newColor;
       this.render();
     };

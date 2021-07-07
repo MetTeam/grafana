@@ -1,4 +1,4 @@
-import _ from 'lodash';
+import { isArray } from 'lodash';
 import coreModule from '../core_module';
 
 export function arrayJoin() {
@@ -7,14 +7,14 @@ export function arrayJoin() {
   return {
     restrict: 'A',
     require: 'ngModel',
-    link: (scope, element, attr, ngModel) => {
-      function split_array(text) {
+    link: (scope: any, element: any, attr: any, ngModel: any) => {
+      function split_array(text: string) {
         return (text || '').split(',');
       }
 
-      function join_array(text) {
-        if (_.isArray(text)) {
-          return (text || '').join(',');
+      function join_array(text: string) {
+        if (isArray(text)) {
+          return ((text || '') as any).join(',');
         } else {
           return text;
         }

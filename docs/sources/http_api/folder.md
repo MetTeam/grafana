@@ -2,11 +2,7 @@
 title = "Folder HTTP API "
 description = "Grafana Folder HTTP API"
 keywords = ["grafana", "http", "documentation", "api", "folder"]
-aliases = ["/http_api/folder/"]
-type = "docs"
-[menu.docs]
-name = "Folder"
-parent = "http_api"
+aliases = ["/docs/grafana/latest/http_api/folder/"]
 +++
 
 # Folder API
@@ -15,7 +11,7 @@ parent = "http_api"
 
 The identifier (id) of a folder is an auto-incrementing numeric value and is only unique per Grafana install.
 
-The unique identifier (uid) of a folder can be used for uniquely identify folders between multiple Grafana installs. It's automatically generated if not provided when creating a folder. The uid allows having consistent URL's for accessing folders and when syncing folders between multiple Grafana installs. This means that changing the title of a folder will not break any bookmarked links to that folder.
+The unique identifier (uid) of a folder can be used for uniquely identify folders between multiple Grafana installs. It's automatically generated if not provided when creating a folder. The uid allows having consistent URLs for accessing folders and when syncing folders between multiple Grafana installs. This means that changing the title of a folder will not break any bookmarked links to that folder.
 
 The uid can have a maximum length of 40 characters.
 
@@ -28,7 +24,7 @@ that you cannot use this API for retrieving information about the General folder
 
 `GET /api/folders`
 
-Returns all folders that the authenticated user has permission to view.
+Returns all folders that the authenticated user has permission to view. You can control the maximum number of folders returned through the `limit` query parameter, the default is 1000.
 
 **Example Request**:
 
@@ -49,17 +45,12 @@ Content-Type: application/json
   {
     "id":1,
     "uid": "nErXDvCkzz",
-    "title": "Departmenet ABC",
-    "url": "/dashboards/f/nErXDvCkzz/department-abc",
-    "hasAcl": false,
-    "canSave": true,
-    "canEdit": true,
-    "canAdmin": true,
-    "createdBy": "admin",
-    "created": "2018-01-31T17:43:12+01:00",
-    "updatedBy": "admin",
-    "updated": "2018-01-31T17:43:12+01:00",
-    "version": 1
+    "title": "Department ABC"
+  },
+  {
+    "id":2,
+    "uid": "k3S1cklGk",
+    "title": "Department RND"
   }
 ]
 ```
@@ -88,7 +79,7 @@ Content-Type: application/json
 {
   "id":1,
   "uid": "nErXDvCkzz",
-  "title": "Departmenet ABC",
+  "title": "Department ABC",
   "url": "/dashboards/f/nErXDvCkzz/department-abc",
   "hasAcl": false,
   "canSave": true,
@@ -143,7 +134,7 @@ Content-Type: application/json
 {
   "id":1,
   "uid": "nErXDvCkzz",
-  "title": "Departmenet ABC",
+  "title": "Department ABC",
   "url": "/dashboards/f/nErXDvCkzz/department-abc",
   "hasAcl": false,
   "canSave": true,
@@ -200,7 +191,7 @@ Content-Type: application/json
 {
   "id":1,
   "uid": "nErXDvCkzz",
-  "title": "Departmenet DEF",
+  "title": "Department DEF",
   "url": "/dashboards/f/nErXDvCkzz/department-def",
   "hasAcl": false,
   "canSave": true,
@@ -264,7 +255,8 @@ HTTP/1.1 200
 Content-Type: application/json
 
 {
-  "message":"Folder deleted"
+  "message":"Folder deleted",
+  "id": 2
 }
 ```
 
@@ -299,7 +291,7 @@ Content-Type: application/json
 {
   "id":1,
   "uid": "nErXDvCkzz",
-  "title": "Departmenet ABC",
+  "title": "Department ABC",
   "url": "/dashboards/f/nErXDvCkzz/department-abc",
   "hasAcl": false,
   "canSave": true,

@@ -1,15 +1,20 @@
-import React, { SFC } from 'react';
+import React, { FC } from 'react';
+import { Icon } from '@grafana/ui';
+import { useLocation } from 'react-router-dom';
+import { getForcedLoginUrl } from './utils';
 
-const SignIn: SFC<any> = () => {
-  const loginUrl = `login?redirect=${encodeURIComponent(window.location.pathname)}`;
+export const SignIn: FC<any> = () => {
+  const location = useLocation();
+  const forcedLoginUrl = getForcedLoginUrl(location.pathname + location.search);
+
   return (
     <div className="sidemenu-item">
-      <a href={loginUrl} className="sidemenu-link" target="_self">
+      <a href={forcedLoginUrl} className="sidemenu-link" target="_self">
         <span className="icon-circle sidemenu-icon">
-          <i className="fa fa-fw fa-sign-in" />
+          <Icon name="signout" size="xl" />
         </span>
       </a>
-      <a href={loginUrl} target="_self">
+      <a href={forcedLoginUrl} target="_self">
         <ul className="dropdown-menu dropdown-menu--sidemenu" role="menu">
           <li className="side-menu-header">
             <span className="sidemenu-item-text">Sign In</span>
@@ -19,5 +24,3 @@ const SignIn: SFC<any> = () => {
     </div>
   );
 };
-
-export default SignIn;

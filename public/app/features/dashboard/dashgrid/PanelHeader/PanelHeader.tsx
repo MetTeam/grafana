@@ -1,88 +1,75 @@
-import React, { Component } from 'react';
-import classNames from 'classnames';
+import React, { FC } from 'react';
+import { cx } from '@emotion/css';
+import { DataLink, PanelData } from '@grafana/data';
+import { Icon } from '@grafana/ui';
+import { selectors } from '@grafana/e2e-selectors';
 
 import PanelHeaderCorner from './PanelHeaderCorner';
-import { PanelHeaderMenu } from './PanelHeaderMenu';
-
-import { DashboardModel } from 'app/features/dashboard/dashboard_model';
-import { PanelModel } from 'app/features/dashboard/panel_model';
-import { ClickOutsideWrapper } from 'app/core/components/ClickOutsideWrapper/ClickOutsideWrapper';
+import { DashboardModel } from 'app/features/dashboard/state/DashboardModel';
+import { PanelModel } from 'app/features/dashboard/state/PanelModel';
+import { getPanelLinksSupplier } from 'app/features/panel/panellinks/linkSuppliers';
+import { PanelHeaderNotices } from './PanelHeaderNotices';
+import { PanelHeaderMenuTrigger } from './PanelHeaderMenuTrigger';
+import { PanelHeaderLoadingIndicator } from './PanelHeaderLoadingIndicator';
+import { PanelHeaderMenuWrapper } from './PanelHeaderMenuWrapper';
 
 export interface Props {
   panel: PanelModel;
   dashboard: DashboardModel;
-  timeInfo: string;
   title?: string;
   description?: string;
-  scopedVars?: string;
-  links?: [];
+  links?: DataLink[];
+  error?: string;
+  alertState?: string;
+  isViewing: boolean;
+  isEditing: boolean;
+  data: PanelData;
 }
 
-interface State {
-  panelMenuOpen: boolean;
-}
+export const PanelHeader: FC<Props> = ({ panel, error, isViewing, isEditing, data, alertState, dashboard }) => {
+  const onCancelQuery = () => panel.getQueryRunner().cancelQuery();
+  const title = panel.getDisplayTitle();
+  const className = cx('panel-header', !(isViewing || isEditing) ? 'grid-drag-handle' : '');
 
-export class PanelHeader extends Component<Props, State> {
-  state = {
-    panelMenuOpen: false,
-  };
-
-  onMenuToggle = event => {
-    event.stopPropagation();
-
-    this.setState(prevState => ({
-      panelMenuOpen: !prevState.panelMenuOpen,
-    }));
-  };
-
-  closeMenu = () => {
-    this.setState({
-      panelMenuOpen: false,
-    });
-  };
-
-  render() {
-    const isFullscreen = false;
-    const isLoading = false;
-    const panelHeaderClass = classNames({ 'panel-header': true, 'grid-drag-handle': !isFullscreen });
-    const { panel, dashboard, timeInfo } = this.props;
-    return (
-      <>
+  return (
+    <>
+      <PanelHeaderLoadingIndicator state={data.state} onClick={onCancelQuery} />
+      <div className={className}>
         <PanelHeaderCorner
           panel={panel}
           title={panel.title}
           description={panel.description}
           scopedVars={panel.scopedVars}
-          links={panel.links}
+          links={getPanelLinksSupplier(panel)}
+          error={error}
         />
-        <div className={panelHeaderClass}>
-          {isLoading && (
-            <span className="panel-loading">
-              <i className="fa fa-spinner fa-spin" />
-            </span>
-          )}
-          <div className="panel-title-container" onClick={this.onMenuToggle}>
-            <div className="panel-title">
-              <span className="icon-gf panel-alert-icon" />
-              <span className="panel-title-text">
-                {panel.title} <span className="fa fa-caret-down panel-menu-toggle" />
-              </span>
-
-              {this.state.panelMenuOpen && (
-                <ClickOutsideWrapper onClick={this.closeMenu}>
-                  <PanelHeaderMenu panel={panel} dashboard={dashboard} />
-                </ClickOutsideWrapper>
-              )}
-
-              {timeInfo && (
-                <span className="panel-time-info">
-                  <i className="fa fa-clock-o" /> {timeInfo}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
-}
+        <PanelHeaderMenuTrigger aria-label={selectors.components.Panels.Panel.title(title)}>
+          {({ closeMenu, panelMenuOpen }) => {
+            return (
+              <div className="panel-title">
+                <PanelHeaderNotices frames={data.series} panelId={panel.id} />
+                {panel.libraryPanel && <Icon name="library-panel" style={{ marginRight: '4px' }} />}
+                {alertState ? (
+                  <Icon
+                    name={alertState === 'alerting' ? 'heart-break' : 'heart'}
+                    className="icon-gf panel-alert-icon"
+                    style={{ marginRight: '4px' }}
+                    size="sm"
+                  />
+                ) : null}
+                <span className="panel-title-text">{title}</span>
+                <Icon name="angle-down" className="panel-menu-toggle" />
+                <PanelHeaderMenuWrapper panel={panel} dashboard={dashboard} show={panelMenuOpen} onClose={closeMenu} />
+                {data.request && data.request.timeInfo && (
+                  <span className="panel-time-info">
+                    <Icon name="clock-nine" size="sm" /> {data.request.timeInfo}
+                  </span>
+                )}
+              </div>
+            );
+          }}
+        </PanelHeaderMenuTrigger>
+      </div>
+    </>
+  );
+};

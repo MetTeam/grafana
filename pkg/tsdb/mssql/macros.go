@@ -6,25 +6,29 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/grafana/pkg/tsdb"
+	"github.com/grafana/grafana/pkg/components/gtime"
+	"github.com/grafana/grafana/pkg/plugins"
+	"github.com/grafana/grafana/pkg/tsdb/sqleng"
 )
 
 const rsIdentifier = `([_a-zA-Z0-9]+)`
 const sExpr = `\$` + rsIdentifier + `\(([^\)]*)\)`
 
-type msSqlMacroEngine struct {
-	*tsdb.SqlMacroEngineBase
-	timeRange *tsdb.TimeRange
-	query     *tsdb.Query
+type msSQLMacroEngine struct {
+	*sqleng.SQLMacroEngineBase
+	timeRange plugins.DataTimeRange
+	query     plugins.DataSubQuery
 }
 
-func newMssqlMacroEngine() tsdb.SqlMacroEngine {
-	return &msSqlMacroEngine{SqlMacroEngineBase: tsdb.NewSqlMacroEngineBase()}
+func newMssqlMacroEngine() sqleng.SQLMacroEngine {
+	return &msSQLMacroEngine{SQLMacroEngineBase: sqleng.NewSQLMacroEngineBase()}
 }
 
-func (m *msSqlMacroEngine) Interpolate(query *tsdb.Query, timeRange *tsdb.TimeRange, sql string) (string, error) {
+func (m *msSQLMacroEngine) Interpolate(query plugins.DataSubQuery, timeRange plugins.DataTimeRange,
+	sql string) (string, error) {
 	m.timeRange = timeRange
 	m.query = query
+	// TODO: Return any error
 	rExp, _ := regexp.Compile(sExpr)
 	var macroError error
 
@@ -48,7 +52,7 @@ func (m *msSqlMacroEngine) Interpolate(query *tsdb.Query, timeRange *tsdb.TimeRa
 	return sql, nil
 }
 
-func (m *msSqlMacroEngine) evaluateMacro(name string, args []string) (string, error) {
+func (m *msSQLMacroEngine) evaluateMacro(name string, args []string) (string, error) {
 	switch name {
 	case "__time":
 		if len(args) == 0 {
@@ -74,12 +78,12 @@ func (m *msSqlMacroEngine) evaluateMacro(name string, args []string) (string, er
 		if len(args) < 2 {
 			return "", fmt.Errorf("macro %v needs time column and interval", name)
 		}
-		interval, err := time.ParseDuration(strings.Trim(args[1], `'"`))
+		interval, err := gtime.ParseInterval(strings.Trim(args[1], `'"`))
 		if err != nil {
 			return "", fmt.Errorf("error parsing interval %v", args[1])
 		}
 		if len(args) == 3 {
-			err := tsdb.SetupFillmode(m.query, interval, args[2])
+			err := sqleng.SetupFillmode(m.query, interval, args[2])
 			if err != nil {
 				return "", err
 			}
@@ -88,7 +92,7 @@ func (m *msSqlMacroEngine) evaluateMacro(name string, args []string) (string, er
 	case "__timeGroupAlias":
 		tg, err := m.evaluateMacro("__timeGroup", args)
 		if err == nil {
-			return tg + " AS [time]", err
+			return tg + " AS [time]", nil
 		}
 		return "", err
 	case "__unixEpochFilter":
@@ -96,16 +100,25 @@ func (m *msSqlMacroEngine) evaluateMacro(name string, args []string) (string, er
 			return "", fmt.Errorf("missing time column argument for macro %v", name)
 		}
 		return fmt.Sprintf("%s >= %d AND %s <= %d", args[0], m.timeRange.GetFromAsSecondsEpoch(), args[0], m.timeRange.GetToAsSecondsEpoch()), nil
+	case "__unixEpochNanoFilter":
+		if len(args) == 0 {
+			return "", fmt.Errorf("missing time column argument for macro %v", name)
+		}
+		return fmt.Sprintf("%s >= %d AND %s <= %d", args[0], m.timeRange.GetFromAsTimeUTC().UnixNano(), args[0], m.timeRange.GetToAsTimeUTC().UnixNano()), nil
+	case "__unixEpochNanoFrom":
+		return fmt.Sprintf("%d", m.timeRange.GetFromAsTimeUTC().UnixNano()), nil
+	case "__unixEpochNanoTo":
+		return fmt.Sprintf("%d", m.timeRange.GetToAsTimeUTC().UnixNano()), nil
 	case "__unixEpochGroup":
 		if len(args) < 2 {
 			return "", fmt.Errorf("macro %v needs time column and interval and optional fill value", name)
 		}
-		interval, err := time.ParseDuration(strings.Trim(args[1], `'`))
+		interval, err := gtime.ParseInterval(strings.Trim(args[1], `'`))
 		if err != nil {
 			return "", fmt.Errorf("error parsing interval %v", args[1])
 		}
 		if len(args) == 3 {
-			err := tsdb.SetupFillmode(m.query, interval, args[2])
+			err := sqleng.SetupFillmode(m.query, interval, args[2])
 			if err != nil {
 				return "", err
 			}
@@ -114,10 +127,10 @@ func (m *msSqlMacroEngine) evaluateMacro(name string, args []string) (string, er
 	case "__unixEpochGroupAlias":
 		tg, err := m.evaluateMacro("__unixEpochGroup", args)
 		if err == nil {
-			return tg + " AS [time]", err
+			return tg + " AS [time]", nil
 		}
 		return "", err
 	default:
-		return "", fmt.Errorf("Unknown macro %v", name)
+		return "", fmt.Errorf("unknown macro %q", name)
 	}
 }

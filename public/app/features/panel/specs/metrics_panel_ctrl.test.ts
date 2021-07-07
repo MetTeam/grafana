@@ -1,60 +1,48 @@
 jest.mock('app/core/core', () => ({}));
 jest.mock('app/core/config', () => {
   return {
-    exploreEnabled: true,
+    ...((jest.requireActual('app/core/config') as unknown) as object),
+    bootData: {
+      user: {},
+    },
     panels: {
       test: {
         id: 'test',
         name: 'test',
       },
     },
+    config: {
+      appSubUrl: 'test',
+    },
   };
 });
 
+// @ts-ignore
 import q from 'q';
-import { PanelModel } from 'app/features/dashboard/panel_model';
+import { PanelModel } from 'app/features/dashboard/state/PanelModel';
 import { MetricsPanelCtrl } from '../metrics_panel_ctrl';
 
 describe('MetricsPanelCtrl', () => {
-  let ctrl;
-
-  beforeEach(() => {
-    ctrl = setupController();
-  });
-
-  describe('when getting additional menu items', () => {
-    let additionalItems;
-
-    describe('and has no datasource set', () => {
-      beforeEach(() => {
-        additionalItems = ctrl.getAdditionalMenuItems();
-      });
-
-      it('should not return any items', () => {
-        expect(additionalItems.length).toBe(0);
-      });
-    });
-
-    describe('and has datasource set that supports explore and user has powers', () => {
-      beforeEach(() => {
-        ctrl.contextSrv = { isEditor: true };
-        ctrl.datasource = { meta: { explore: true } };
-        additionalItems = ctrl.getAdditionalMenuItems();
-      });
-
-      it('should not return any items', () => {
-        expect(additionalItems.length).toBe(1);
-      });
+  describe('can setup', () => {
+    it('should return controller', async () => {
+      const ctrl = setupController({ hasAccessToExplore: true });
+      expect((await ctrl.getAdditionalMenuItems()).length).toBe(0);
     });
   });
 });
 
-function setupController() {
+function setupController({ hasAccessToExplore } = { hasAccessToExplore: false }) {
   const injectorStub = {
-    get: type => {
+    get: (type: any) => {
       switch (type) {
         case '$q': {
           return q;
+        }
+        case 'contextSrv': {
+          return { hasAccessToExplore: () => hasAccessToExplore };
+        }
+        case 'timeSrv': {
+          return { timeRangeForUrl: () => {} };
         }
         default: {
           return jest.fn();
@@ -63,15 +51,17 @@ function setupController() {
     },
   };
 
-  const scope = {
+  const scope: any = {
     panel: { events: [] },
     appEvent: jest.fn(),
     onAppEvent: jest.fn(),
     $on: jest.fn(),
     colors: [],
+    $parent: {
+      panel: new PanelModel({ type: 'test' }),
+      dashboard: {},
+    },
   };
-
-  MetricsPanelCtrl.prototype.panel = new PanelModel({ type: 'test' });
 
   return new MetricsPanelCtrl(scope, injectorStub);
 }

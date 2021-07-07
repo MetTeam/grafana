@@ -1,9 +1,9 @@
-import { DataSource } from 'app/types';
+import { DataSourceSettings } from '@grafana/data';
 
-export const getMockDataSources = (amount: number): DataSource[] => {
+export const getMockDataSources = (amount: number) => {
   const dataSources = [];
 
-  for (let i = 0; i <= amount; i++) {
+  for (let i = 0; i < amount; i++) {
     dataSources.push({
       access: '',
       basicAuth: false,
@@ -22,10 +22,10 @@ export const getMockDataSources = (amount: number): DataSource[] => {
     });
   }
 
-  return dataSources;
+  return dataSources as DataSourceSettings[];
 };
 
-export const getMockDataSource = (): DataSource => {
+export const getMockDataSource = (): DataSourceSettings => {
   return {
     access: '',
     basicAuth: false,
@@ -37,6 +37,7 @@ export const getMockDataSource = (): DataSource => {
     isDefault: false,
     jsonData: { authType: 'credentials', defaultRegion: 'eu-west-2' },
     name: 'gdev-cloudwatch',
+    typeName: 'Cloudwatch',
     orgId: 1,
     password: '',
     readOnly: false,
@@ -44,5 +45,6 @@ export const getMockDataSource = (): DataSource => {
     typeLogoUrl: 'public/app/plugins/datasource/cloudwatch/img/amazon-web-services.png',
     url: '',
     user: '',
+    secureJsonFields: {},
   };
 };

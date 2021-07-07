@@ -10,6 +10,7 @@
       .graph-legend {
         flex: 0 1 10px;
         max-height: 100%;
+        overflow-y: initial;
       }
 
       .graph-legend-series {
@@ -50,6 +51,7 @@
   max-height: 35%;
   margin: 0;
   text-align: center;
+  overflow-y: auto;
   padding-top: 6px;
   position: relative;
 
@@ -74,7 +76,7 @@
   display: inline;
   cursor: pointer;
   white-space: nowrap;
-  font-size: 85%;
+  font-size: 12px;
   text-align: left;
   &.current::before {
     content: 'Current: ';
@@ -103,6 +105,8 @@
   float: left;
   white-space: nowrap;
   padding-left: 10px;
+  display: flex;
+  align-items: center;
 
   &--right-y {
     float: right;
@@ -118,27 +122,7 @@
   padding-left: 6px;
 }
 
-// fix for phantomjs
-.body--phantomjs {
-  .graph-panel--legend-right {
-    .graph-legend {
-      display: block;
-      max-width: min-content;
-    }
-
-    .graph-panel__chart {
-      display: flex;
-    }
-
-    .graph-legend-table {
-      display: table;
-      width: auto;
-    }
-  }
-}
-
 .graph-legend-table {
-  padding-bottom: 1px;
   padding-right: 5px;
   padding-left: 5px;
 
@@ -164,17 +148,12 @@
     float: none;
     display: table-cell;
     white-space: nowrap;
-    padding: 2px 10px;
+    padding: 2px;
     text-align: right;
   }
 
   .graph-legend-icon {
-    width: 5px;
-    padding: 0;
-    top: 0;
-    .fa {
-      top: 4px;
-    }
+    cursor: pointer;
   }
 
   .graph-legend-value {
@@ -182,15 +161,13 @@
   }
 
   .graph-legend-alias {
-    padding-left: 7px;
     text-align: left;
-    width: 95%;
     max-width: 650px;
     text-overflow: ellipsis;
     overflow: hidden;
   }
 
-  .graph-legend-series:nth-child(odd) {
+  .graph-legend-series:nth-child(even) {
     background: $table-bg-accent;
   }
 
@@ -216,6 +193,11 @@
   }
 }
 
+.graph-legend-series__table-name {
+  display: flex;
+  align-items: center;
+}
+
 .graph-legend-series-hidden {
   .graph-legend-value,
   .graph-legend-alias {
@@ -239,18 +221,8 @@
   color: $purple;
 }
 
-.graph-series-override {
-  input {
-    float: left;
-    margin-right: 10px;
-  }
-  .graph-series-override-option {
-    float: left;
-    padding: 2px 6px;
-  }
-  .graph-series-override-selector {
-    float: left;
-  }
+.graph-series-override__properties {
+  margin-left: $space-md;
 }
 
 .graph-tooltip {
@@ -263,8 +235,8 @@
     text-align: center;
     position: relative;
     top: -3px;
-    padding: 0.2rem;
-    font-weight: bold;
+    padding: $space-xxs;
+    font-weight: $font-weight-semi-bold;
     color: $text-color;
   }
 
@@ -273,13 +245,13 @@
 
     &--highlight {
       color: $text-color-emphasis;
-      font-weight: bold;
+      font-weight: $font-weight-semi-bold;
     }
   }
 
   .graph-tooltip-series-name {
     display: table-cell;
-    padding: 0.15rem;
+    padding: $space-xxs;
     max-width: 650px;
     text-overflow: ellipsis;
     overflow: hidden;
@@ -287,7 +259,7 @@
 
   .graph-tooltip-value {
     display: table-cell;
-    font-weight: bold;
+    font-weight: $font-weight-semi-bold;
     padding-left: 15px;
     text-align: right;
   }
@@ -300,9 +272,10 @@
   }
 
   .graph-annotation__header {
-    background-color: $popover-border-color;
-    padding: 6px 10px;
+    background: $popover-header-bg;
+    padding: 4px 8px;
     display: flex;
+    flex-wrap: nowrap;
   }
 
   .graph-annotation__title {
@@ -329,7 +302,7 @@
   }
 
   .graph-annotation__body {
-    padding: 0.65rem;
+    padding: $space-sm;
   }
 
   .graph-annotation__user {
@@ -348,18 +321,14 @@
 
 .left-yaxis-label {
   top: 50%;
-  left: 2px;
+  left: 8px;
   transform: translateX(-50%) translateY(-50%) rotate(-90deg);
-  // this is needed for phantomsjs 2.1
-  -webkit-transform: translateX(-50%) translateY(-50%) rotate(-90deg);
 }
 
 .right-yaxis-label {
   top: 50%;
-  right: 2px;
+  right: 8px;
   transform: translateX(50%) translateY(-50%) rotate(90deg);
-  // this is needed for phantomsjs 2.1
-  -webkit-transform: translateX(50%) translateY(-50%) rotate(90deg);
 }
 
 .axisLabel {
@@ -397,21 +366,23 @@
       top: 0px;
       float: left;
       border-right: 1px solid $btn-divider-left;
-      padding: 0.5rem 0.3rem 0.4rem 0.4rem;
+      padding: 6px 4px 4px 6px;
     }
   }
 
   .alert-handle-value {
     border-left: 1px solid $btn-divider-right;
-    padding: 0.5rem;
-    line-height: 2rem;
+    padding: $space-xs $space-sm;
+    padding: 7px;
+    line-height: 24px;
+    height: 24px;
 
     .alert-handle-grip {
       background: url($btn-drag-image) no-repeat 50% 50%;
       background-size: 8px;
       float: right;
-      width: 1rem;
-      height: 2rem;
+      width: 16px;
+      height: 24px;
       margin-right: 2px;
     }
   }

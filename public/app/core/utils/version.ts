@@ -1,4 +1,4 @@
-import _ from 'lodash';
+import { isNumber } from 'lodash';
 
 const versionPattern = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z\.]+))?/;
 
@@ -9,6 +9,10 @@ export class SemVersion {
   meta: string;
 
   constructor(version: string) {
+    this.major = 0;
+    this.minor = 0;
+    this.patch = 0;
+    this.meta = '';
     const match = versionPattern.exec(version);
     if (match) {
       this.major = Number(match[1]);
@@ -20,11 +24,24 @@ export class SemVersion {
 
   isGtOrEq(version: string): boolean {
     const compared = new SemVersion(version);
-    return !(this.major < compared.major || this.minor < compared.minor || this.patch < compared.patch);
+
+    for (let i = 0; i < this.comparable.length; ++i) {
+      if (this.comparable[i] > compared.comparable[i]) {
+        return true;
+      }
+      if (this.comparable[i] < compared.comparable[i]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   isValid(): boolean {
-    return _.isNumber(this.major);
+    return isNumber(this.major);
+  }
+
+  get comparable() {
+    return [this.major, this.minor, this.patch];
   }
 }
 

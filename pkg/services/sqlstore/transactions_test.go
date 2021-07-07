@@ -1,3 +1,5 @@
+// +build integration
+
 package sqlstore
 
 import (
@@ -5,27 +7,25 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/grafana/grafana/pkg/models"
-
 	. "github.com/smartystreets/goconvey/convey"
+
+	"github.com/grafana/grafana/pkg/models"
 )
 
-var ProvokedError = errors.New("testing error.")
+var ErrProvokedError = errors.New("testing error")
 
 func TestTransaction(t *testing.T) {
 	ss := InitTestDB(t)
 
-	Convey("InTransaction asdf asdf", t, func() {
+	Convey("InTransaction", t, func() {
 		cmd := &models.AddApiKeyCommand{Key: "secret-key", Name: "key", OrgId: 1}
 
 		err := AddApiKey(cmd)
 		So(err, ShouldBeNil)
 
-		deleteApiKeyCmd := &models.DeleteApiKeyCommand{Id: cmd.Result.Id, OrgId: 1}
-
 		Convey("can update key", func() {
-			err := ss.InTransaction(context.Background(), func(ctx context.Context) error {
-				return DeleteApiKeyCtx(ctx, deleteApiKeyCmd)
+			err := ss.WithTransactionalDbSession(context.Background(), func(sess *DBSession) error {
+				return deleteAPIKey(sess, cmd.Result.Id, 1)
 			})
 
 			So(err, ShouldBeNil)
@@ -36,16 +36,16 @@ func TestTransaction(t *testing.T) {
 		})
 
 		Convey("won't update if one handler fails", func() {
-			err := ss.InTransaction(context.Background(), func(ctx context.Context) error {
-				err := DeleteApiKeyCtx(ctx, deleteApiKeyCmd)
+			err := ss.WithTransactionalDbSession(context.Background(), func(sess *DBSession) error {
+				err := deleteAPIKey(sess, cmd.Result.Id, 1)
 				if err != nil {
 					return err
 				}
 
-				return ProvokedError
+				return ErrProvokedError
 			})
 
-			So(err, ShouldEqual, ProvokedError)
+			So(err, ShouldEqual, ErrProvokedError)
 
 			query := &models.GetApiKeyByIdQuery{ApiKeyId: cmd.Result.Id}
 			err = GetApiKeyById(query)

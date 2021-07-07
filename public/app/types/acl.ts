@@ -19,10 +19,10 @@ export interface DashboardAclDTO {
 }
 
 export interface DashboardAclUpdateDTO {
-  userId: number;
-  teamId: number;
-  role: OrgRole;
-  permission: PermissionLevel;
+  userId?: number;
+  teamId?: number;
+  role?: OrgRole;
+  permission?: PermissionLevel;
 }
 
 export interface DashboardAcl {
@@ -39,6 +39,8 @@ export interface DashboardAcl {
   name?: string;
   inherited?: boolean;
   sortRank?: number;
+  userAvatarUrl?: string;
+  teamAvatarUrl?: string;
 }
 
 export interface DashboardPermissionInfo {
@@ -75,7 +77,7 @@ export enum AclTarget {
 
 export interface AclTargetInfo {
   value: AclTarget;
-  text: string;
+  label: string;
 }
 
 export const dataSourceAclLevels = [
@@ -83,10 +85,10 @@ export const dataSourceAclLevels = [
 ];
 
 export const dashboardAclTargets: AclTargetInfo[] = [
-  { value: AclTarget.Team, text: 'Team' },
-  { value: AclTarget.User, text: 'User' },
-  { value: AclTarget.Viewer, text: 'Everyone With Viewer Role' },
-  { value: AclTarget.Editor, text: 'Everyone With Editor Role' },
+  { value: AclTarget.Team, label: 'Team' },
+  { value: AclTarget.User, label: 'User' },
+  { value: AclTarget.Viewer, label: 'Everyone With Viewer Role' },
+  { value: AclTarget.Editor, label: 'Everyone With Editor Role' },
 ];
 
 export const dashboardPermissionLevels: DashboardPermissionInfo[] = [
@@ -96,5 +98,25 @@ export const dashboardPermissionLevels: DashboardPermissionInfo[] = [
     value: PermissionLevel.Admin,
     label: 'Admin',
     description: 'Can add/remove permissions and can add, edit and delete dashboards.',
+  },
+];
+
+export enum TeamPermissionLevel {
+  Member = 0,
+  Admin = 4,
+}
+
+export interface TeamPermissionInfo {
+  value: TeamPermissionLevel;
+  label: string;
+  description: string;
+}
+
+export const teamsPermissionLevels: TeamPermissionInfo[] = [
+  { value: TeamPermissionLevel.Member, label: 'Member', description: 'Is team member' },
+  {
+    value: TeamPermissionLevel.Admin,
+    label: 'Admin',
+    description: 'Can add/remove permissions, members and delete team.',
   },
 ];

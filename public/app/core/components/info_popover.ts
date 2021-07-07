@@ -1,13 +1,14 @@
-import _ from 'lodash';
+import { each } from 'lodash';
 import coreModule from 'app/core/core_module';
+// @ts-ignore
 import Drop from 'tether-drop';
 
 export function infoPopover() {
   return {
     restrict: 'E',
-    template: '<i class="fa fa-info-circle"></i>',
+    template: `<icon name="'info-circle'" style="margin-left: 10px;" size="'xs'"></icon>`,
     transclude: true,
-    link: (scope, elem, attrs, ctrl, transclude) => {
+    link: (scope: any, elem: any, attrs: any, ctrl: any, transclude: any) => {
       const offset = attrs.offset || '0 -10px';
       const position = attrs.position || 'right middle';
       let classes = 'drop-help drop-hide-out-of-bounds';
@@ -23,11 +24,11 @@ export function infoPopover() {
         elem.addClass('gf-form-help-icon--' + attrs.mode);
       }
 
-      transclude((clone, newScope) => {
+      transclude((clone: any, newScope: any) => {
         const content = document.createElement('div');
         content.className = 'markdown-html';
 
-        _.each(clone, node => {
+        each(clone, (node) => {
           content.appendChild(node);
         });
 

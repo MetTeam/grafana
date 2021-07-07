@@ -2,14 +2,37 @@ package es
 
 import (
 	"encoding/json"
+	"net/http"
 
-	"github.com/grafana/grafana/pkg/tsdb"
+	"github.com/grafana/grafana/pkg/components/simplejson"
+	"github.com/grafana/grafana/pkg/tsdb/interval"
 )
+
+type response struct {
+	httpResponse *http.Response
+	reqInfo      *SearchRequestInfo
+}
+
+type SearchRequestInfo struct {
+	Method string `json:"method"`
+	Url    string `json:"url"`
+	Data   string `json:"data"`
+}
+
+type SearchResponseInfo struct {
+	Status int              `json:"status"`
+	Data   *simplejson.Json `json:"data"`
+}
+
+type SearchDebugInfo struct {
+	Request  *SearchRequestInfo  `json:"request"`
+	Response *SearchResponseInfo `json:"response"`
+}
 
 // SearchRequest represents a search request
 type SearchRequest struct {
 	Index       string
-	Interval    tsdb.Interval
+	Interval    interval.Interval
 	Size        int
 	Sort        map[string]interface{}
 	Query       *Query
@@ -41,8 +64,7 @@ func (r *SearchRequest) MarshalJSON() ([]byte, error) {
 
 // SearchResponseHits represents search response hits
 type SearchResponseHits struct {
-	Hits  []map[string]interface{}
-	Total int64
+	Hits []map[string]interface{}
 }
 
 // SearchResponse represents a search response
@@ -51,21 +73,6 @@ type SearchResponse struct {
 	Aggregations map[string]interface{} `json:"aggregations"`
 	Hits         *SearchResponseHits    `json:"hits"`
 }
-
-// func (r *Response) getErrMsg() string {
-// 	var msg bytes.Buffer
-// 	errJson := simplejson.NewFromAny(r.Err)
-// 	errType, err := errJson.Get("type").String()
-// 	if err == nil {
-// 		msg.WriteString(fmt.Sprintf("type:%s", errType))
-// 	}
-
-// 	reason, err := errJson.Get("type").String()
-// 	if err == nil {
-// 		msg.WriteString(fmt.Sprintf("reason:%s", reason))
-// 	}
-// 	return msg.String()
-// }
 
 // MultiSearchRequest represents a multi search request
 type MultiSearchRequest struct {
@@ -76,6 +83,7 @@ type MultiSearchRequest struct {
 type MultiSearchResponse struct {
 	Status    int               `json:"status,omitempty"`
 	Responses []*SearchResponse `json:"responses"`
+	DebugInfo *SearchDebugInfo  `json:"-"`
 }
 
 // Query represents a query
@@ -86,11 +94,6 @@ type Query struct {
 // BoolQuery represents a bool query
 type BoolQuery struct {
 	Filters []Filter
-}
-
-// NewBoolQuery create a new bool query
-func NewBoolQuery() *BoolQuery {
-	return &BoolQuery{Filters: make([]Filter, 0)}
 }
 
 // MarshalJSON returns the JSON encoding of the boolean query.
@@ -277,8 +280,10 @@ type MetricAggregation struct {
 
 // MarshalJSON returns the JSON encoding of the metric aggregation
 func (a *MetricAggregation) MarshalJSON() ([]byte, error) {
-	root := map[string]interface{}{
-		"field": a.Field,
+	root := map[string]interface{}{}
+
+	if a.Field != "" {
+		root["field"] = a.Field
 	}
 
 	for k, v := range a.Settings {
@@ -292,7 +297,7 @@ func (a *MetricAggregation) MarshalJSON() ([]byte, error) {
 
 // PipelineAggregation represents a metric aggregation
 type PipelineAggregation struct {
-	BucketPath string
+	BucketPath interface{}
 	Settings   map[string]interface{}
 }
 

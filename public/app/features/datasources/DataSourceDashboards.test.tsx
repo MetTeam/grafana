@@ -1,18 +1,22 @@
 import React from 'react';
 import { shallow } from 'enzyme';
 import { DataSourceDashboards, Props } from './DataSourceDashboards';
-import { DataSource, NavModel, PluginDashboard } from 'app/types';
+import { DataSourceSettings, NavModel } from '@grafana/data';
+import { PluginDashboard } from 'app/types';
+import { getRouteComponentProps } from 'app/core/navigation/__mocks__/routeProps';
 
 const setup = (propOverrides?: object) => {
   const props: Props = {
+    ...getRouteComponentProps(),
     navModel: {} as NavModel,
     dashboards: [] as PluginDashboard[],
-    dataSource: {} as DataSource,
-    pageId: 1,
+    dataSource: {} as DataSourceSettings,
+    dataSourceId: 1,
     importDashboard: jest.fn(),
     loadDataSource: jest.fn(),
     loadPluginDashboards: jest.fn(),
     removeDashboard: jest.fn(),
+    isLoading: false,
   };
 
   Object.assign(props, propOverrides);

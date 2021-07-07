@@ -3,16 +3,14 @@ package plugins
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
-	"path"
-	"time"
+	"fmt"
+	"path/filepath"
 
-	"github.com/grafana/grafana-plugin-model/go/datasource"
-	"github.com/grafana/grafana/pkg/log"
+	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/models"
-	"github.com/grafana/grafana/pkg/plugins/datasource/wrapper"
-	"github.com/grafana/grafana/pkg/tsdb"
-	plugin "github.com/hashicorp/go-plugin"
+	"github.com/grafana/grafana/pkg/plugins/backendplugin"
+	"github.com/grafana/grafana/pkg/plugins/backendplugin/grpcplugin"
+	"github.com/grafana/grafana/pkg/util/errutil"
 )
 
 // DataSourcePlugin contains all metadata about a datasource plugin
@@ -24,101 +22,75 @@ type DataSourcePlugin struct {
 	Explore      bool              `json:"explore"`
 	Table        bool              `json:"tables"`
 	Logs         bool              `json:"logs"`
+	Tracing      bool              `json:"tracing"`
 	QueryOptions map[string]bool   `json:"queryOptions,omitempty"`
 	BuiltIn      bool              `json:"builtIn,omitempty"`
 	Mixed        bool              `json:"mixed,omitempty"`
 	Routes       []*AppPluginRoute `json:"routes"`
+	Streaming    bool              `json:"streaming"`
 
 	Backend    bool   `json:"backend,omitempty"`
 	Executable string `json:"executable,omitempty"`
+	SDK        bool   `json:"sdk,omitempty"`
 
-	log    log.Logger
-	client *plugin.Client
+	client       *grpcplugin.Client
+	legacyClient *grpcplugin.LegacyClient
+	logger       log.Logger
 }
 
-func (p *DataSourcePlugin) Load(decoder *json.Decoder, pluginDir string) error {
-	if err := decoder.Decode(&p); err != nil {
-		return err
+func (p *DataSourcePlugin) Load(decoder *json.Decoder, base *PluginBase, backendPluginManager backendplugin.Manager) (
+	interface{}, error) {
+	if err := decoder.Decode(p); err != nil {
+		return nil, errutil.Wrapf(err, "Failed to decode datasource plugin")
 	}
 
-	if err := p.registerPlugin(pluginDir); err != nil {
-		return err
-	}
-
-	DataSources[p.Id] = p
-	return nil
-}
-
-var handshakeConfig = plugin.HandshakeConfig{
-	ProtocolVersion:  1,
-	MagicCookieKey:   "grafana_plugin_type",
-	MagicCookieValue: "datasource",
-}
-
-func (p *DataSourcePlugin) startBackendPlugin(ctx context.Context, log log.Logger) error {
-	p.log = log.New("plugin-id", p.Id)
-
-	err := p.spawnSubProcess()
-	if err == nil {
-		go p.restartKilledProcess(ctx)
-	}
-
-	return err
-}
-
-func (p *DataSourcePlugin) spawnSubProcess() error {
-	cmd := ComposePluginStartCommmand(p.Executable)
-	fullpath := path.Join(p.PluginDir, cmd)
-
-	p.client = plugin.NewClient(&plugin.ClientConfig{
-		HandshakeConfig:  handshakeConfig,
-		Plugins:          map[string]plugin.Plugin{p.Id: &datasource.DatasourcePluginImpl{}},
-		Cmd:              exec.Command(fullpath),
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-		Logger:           LogWrapper{Logger: p.log},
-	})
-
-	rpcClient, err := p.client.Client()
-	if err != nil {
-		return err
-	}
-
-	raw, err := rpcClient.Dispense(p.Id)
-	if err != nil {
-		return err
-	}
-
-	plugin := raw.(datasource.DatasourcePlugin)
-
-	tsdb.RegisterTsdbQueryEndpoint(p.Id, func(dsInfo *models.DataSource) (tsdb.TsdbQueryEndpoint, error) {
-		return wrapper.NewDatasourcePluginWrapper(p.log, plugin), nil
-	})
-
-	return nil
-}
-
-func (p *DataSourcePlugin) restartKilledProcess(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second * 1)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if p.client.Exited() {
-				err := p.spawnSubProcess()
-				p.log.Debug("Spawning new sub process", "name", p.Name, "id", p.Id)
-				if err != nil {
-					p.log.Error("Failed to spawn subprocess")
-				}
-			}
+	if p.Backend {
+		cmd := ComposePluginStartCommand(p.Executable)
+		fullpath := filepath.Join(base.PluginDir, cmd)
+		factory := grpcplugin.NewBackendPlugin(p.Id, fullpath, grpcplugin.PluginStartFuncs{
+			OnLegacyStart: p.onLegacyPluginStart,
+			OnStart:       p.onPluginStart,
+		})
+		if err := backendPluginManager.Register(p.Id, factory); err != nil {
+			return nil, errutil.Wrapf(err, "failed to register backend plugin")
 		}
 	}
+
+	return p, nil
 }
 
-func (p *DataSourcePlugin) Kill() {
-	if p.client != nil {
-		p.log.Debug("Killing subprocess ", "name", p.Name)
-		p.client.Kill()
+func (p *DataSourcePlugin) DataQuery(ctx context.Context, dsInfo *models.DataSource, query DataQuery) (DataResponse, error) {
+	if !p.CanHandleDataQueries() {
+		return DataResponse{}, fmt.Errorf("plugin %q can't handle data queries", p.Id)
 	}
+
+	if p.client != nil {
+		endpoint := newDataSourcePluginWrapperV2(p.logger, p.Id, p.Type, p.client.DataPlugin)
+		return endpoint.Query(ctx, dsInfo, query)
+	}
+
+	endpoint := newDataSourcePluginWrapper(p.logger, p.legacyClient.DatasourcePlugin)
+	return endpoint.Query(ctx, dsInfo, query)
+}
+
+func (p *DataSourcePlugin) onLegacyPluginStart(pluginID string, client *grpcplugin.LegacyClient, logger log.Logger) error {
+	p.legacyClient = client
+	p.logger = logger
+
+	return nil
+}
+
+func (p *DataSourcePlugin) CanHandleDataQueries() bool {
+	return p.client != nil || p.legacyClient != nil
+}
+
+func (p *DataSourcePlugin) onPluginStart(pluginID string, client *grpcplugin.Client, logger log.Logger) error {
+	if client.DataPlugin == nil {
+		return nil
+	}
+
+	p.client = client
+	p.logger = logger
+
+	return nil
 }

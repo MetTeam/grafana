@@ -1,6 +1,7 @@
-import _ from 'lodash';
+import { debounce, each, map, partial, escape, unescape } from 'lodash';
 import $ from 'jquery';
 import coreModule from 'app/core/core_module';
+import { promiseToDigest } from '../../utils/promiseToDigest';
 
 const template = `
 <div class="dropdown cascade-open">
@@ -14,7 +15,7 @@ const template = `
 `;
 
 /** @ngInject */
-export function queryPartEditorDirective($compile, templateSrv) {
+export function queryPartEditorDirective(templateSrv: any) {
   const paramTemplate = '<input type="text" class="hide input-mini tight-form-func-param"></input>';
 
   return {
@@ -25,7 +26,7 @@ export function queryPartEditorDirective($compile, templateSrv) {
       handleEvent: '&',
       debounce: '@',
     },
-    link: function postLink($scope, elem) {
+    link: function postLink($scope: any, elem: any) {
       const part = $scope.part;
       const partDef = part.def;
       const $paramsContainer = elem.find('.query-part-parameters');
@@ -33,13 +34,12 @@ export function queryPartEditorDirective($compile, templateSrv) {
 
       $scope.partActions = [];
 
-      function clickFuncParam(this: any, paramIndex) {
-        /*jshint validthis:true */
+      function clickFuncParam(this: any, paramIndex: number) {
         const $link = $(this);
         const $input = $link.next();
 
         $input.val(part.params[paramIndex]);
-        $input.css('width', $link.width() + 16 + 'px');
+        $input.css('width', $link.width()! + 16 + 'px');
 
         $link.hide();
         $input.show();
@@ -53,8 +53,7 @@ export function queryPartEditorDirective($compile, templateSrv) {
         }
       }
 
-      function inputBlur(this: any, paramIndex) {
-        /*jshint validthis:true */
+      function inputBlur(this: any, paramIndex: number) {
         const $input = $(this);
         const $link = $input.prev();
         const newValue = $input.val();
@@ -72,28 +71,26 @@ export function queryPartEditorDirective($compile, templateSrv) {
         $link.show();
       }
 
-      function inputKeyPress(this: any, paramIndex, e) {
-        /*jshint validthis:true */
+      function inputKeyPress(this: any, paramIndex: number, e: any) {
         if (e.which === 13) {
           inputBlur.call(this, paramIndex);
         }
       }
 
       function inputKeyDown(this: any) {
-        /*jshint validthis:true */
         this.style.width = (3 + this.value.length) * 8 + 'px';
       }
 
-      function addTypeahead($input, param, paramIndex) {
+      function addTypeahead($input: JQuery, param: any, paramIndex: number) {
         if (!param.options && !param.dynamicLookup) {
           return;
         }
 
-        const typeaheadSource = (query, callback) => {
+        const typeaheadSource = (query: string, callback: any) => {
           if (param.options) {
             let options = param.options;
             if (param.type === 'int') {
-              options = _.map(options, val => {
+              options = map(options, (val) => {
                 return val.toString();
               });
             }
@@ -101,9 +98,9 @@ export function queryPartEditorDirective($compile, templateSrv) {
           }
 
           $scope.$apply(() => {
-            $scope.handleEvent({ $event: { name: 'get-param-options' } }).then(result => {
-              const dynamicOptions = _.map(result, op => {
-                return _.escape(op.value);
+            $scope.handleEvent({ $event: { name: 'get-param-options' } }).then((result: any) => {
+              const dynamicOptions = map(result, (op) => {
+                return escape(op.value);
               });
               callback(dynamicOptions);
             });
@@ -116,8 +113,8 @@ export function queryPartEditorDirective($compile, templateSrv) {
           source: typeaheadSource,
           minLength: 0,
           items: 1000,
-          updater: value => {
-            value = _.unescape(value);
+          updater: (value: string) => {
+            value = unescape(value);
             setTimeout(() => {
               inputBlur.call($input[0], paramIndex);
             }, 0);
@@ -126,29 +123,31 @@ export function queryPartEditorDirective($compile, templateSrv) {
         });
 
         const typeahead = $input.data('typeahead');
-        typeahead.lookup = function() {
+        typeahead.lookup = function () {
           this.query = this.$element.val() || '';
           const items = this.source(this.query, $.proxy(this.process, this));
           return items ? this.process(items) : items;
         };
 
         if (debounceLookup) {
-          typeahead.lookup = _.debounce(typeahead.lookup, 500, { leading: true });
+          typeahead.lookup = debounce(typeahead.lookup, 500, { leading: true });
         }
       }
 
       $scope.showActionsMenu = () => {
-        $scope.handleEvent({ $event: { name: 'get-part-actions' } }).then(res => {
-          $scope.partActions = res;
-        });
+        promiseToDigest($scope)(
+          $scope.handleEvent({ $event: { name: 'get-part-actions' } }).then((res: any) => {
+            $scope.partActions = res;
+          })
+        );
       };
 
-      $scope.triggerPartAction = action => {
+      $scope.triggerPartAction = (action: string) => {
         $scope.handleEvent({ $event: { name: 'action', action: action } });
       };
 
       function addElementsAndCompile() {
-        _.each(partDef.params, (param, index) => {
+        each(partDef.params, (param: any, index: number) => {
           if (param.optional && part.params.length <= index) {
             return;
           }
@@ -164,10 +163,10 @@ export function queryPartEditorDirective($compile, templateSrv) {
           $paramLink.appendTo($paramsContainer);
           $input.appendTo($paramsContainer);
 
-          $input.blur(_.partial(inputBlur, index));
+          $input.blur(partial(inputBlur, index));
           $input.keyup(inputKeyDown);
-          $input.keypress(_.partial(inputKeyPress, index));
-          $paramLink.click(_.partial(clickFuncParam, index));
+          $input.keypress(partial(inputKeyPress, index));
+          $paramLink.click(partial(clickFuncParam, index));
 
           addTypeahead($input, param, index);
         });

@@ -3,7 +3,7 @@ package influxdb
 import (
 	"testing"
 
-	"github.com/grafana/grafana/pkg/tsdb"
+	"github.com/grafana/grafana/pkg/plugins"
 )
 
 func TestInfluxdbQueryPart(t *testing.T) {
@@ -24,9 +24,11 @@ func TestInfluxdbQueryPart(t *testing.T) {
 		{mode: "count", params: []string{}, input: "distinct(value)", expected: `count(distinct(value))`},
 		{mode: "mode", params: []string{}, input: "value", expected: `mode(value)`},
 		{mode: "cumulative_sum", params: []string{}, input: "mean(value)", expected: `cumulative_sum(mean(value))`},
+		{mode: "non_negative_difference", params: []string{}, input: "max(value)", expected: `non_negative_difference(max(value))`},
 	}
 
-	queryContext := &tsdb.TsdbQuery{TimeRange: tsdb.NewTimeRange("5m", "now")}
+	timeRange := plugins.NewDataTimeRange("5m", "now")
+	queryContext := plugins.DataQuery{TimeRange: &timeRange}
 	query := &Query{}
 
 	for _, tc := range tcs {

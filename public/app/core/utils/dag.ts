@@ -1,8 +1,8 @@
 export class Edge {
-  inputNode: Node;
-  outputNode: Node;
+  inputNode?: Node;
+  outputNode?: Node;
 
-  _linkTo(node, direction) {
+  _linkTo(node: Node, direction: number) {
     if (direction <= 0) {
       node.inputEdges.push(this);
     }
@@ -60,9 +60,6 @@ export class Edge {
     if (pos > -1) {
       onode.inputEdges.splice(pos, 1);
     }
-
-    this.inputNode = null;
-    this.outputNode = null;
   }
 }
 
@@ -79,49 +76,49 @@ export class Node {
     this.outputEdges = [];
   }
 
-  getEdgeFrom(from: string | Node): Edge {
+  getEdgeFrom(from: string | Node): Edge | null | undefined {
     if (!from) {
       return null;
     }
 
     if (typeof from === 'object') {
-      return this.inputEdges.find(e => e.inputNode.name === from.name);
+      return this.inputEdges.find((e) => e.inputNode?.name === from.name);
     }
 
-    return this.inputEdges.find(e => e.inputNode.name === from);
+    return this.inputEdges.find((e) => e.inputNode?.name === from);
   }
 
-  getEdgeTo(to: string | Node): Edge {
+  getEdgeTo(to: string | Node): Edge | null | undefined {
     if (!to) {
       return null;
     }
 
     if (typeof to === 'object') {
-      return this.outputEdges.find(e => e.outputNode.name === to.name);
+      return this.outputEdges.find((e) => e.outputNode?.name === to.name);
     }
 
-    return this.outputEdges.find(e => e.outputNode.name === to);
+    return this.outputEdges.find((e) => e.outputNode?.name === to);
   }
 
   getOptimizedInputEdges(): Edge[] {
-    const toBeRemoved = [];
-    this.inputEdges.forEach(e => {
-      const inputEdgesNodes = e.inputNode.inputEdges.map(e => e.inputNode);
+    const toBeRemoved: any[] = [];
+    this.inputEdges.forEach((e) => {
+      const inputEdgesNodes = e.inputNode?.inputEdges.map((e) => e.inputNode);
 
-      inputEdgesNodes.forEach(n => {
-        const edgeToRemove = n.getEdgeTo(this.name);
+      inputEdgesNodes?.forEach((n) => {
+        const edgeToRemove = n?.getEdgeTo(this.name);
         if (edgeToRemove) {
           toBeRemoved.push(edgeToRemove);
         }
       });
     });
 
-    return this.inputEdges.filter(e => toBeRemoved.indexOf(e) === -1);
+    return this.inputEdges.filter((e) => toBeRemoved.indexOf(e) === -1);
   }
 }
 
 export class Graph {
-  nodes = {};
+  nodes: any = {};
 
   constructor() {}
 
@@ -132,8 +129,8 @@ export class Graph {
   }
 
   createNodes(names: string[]): Node[] {
-    const nodes = [];
-    names.forEach(name => {
+    const nodes: Node[] = [];
+    names.forEach((name) => {
       nodes.push(this.createNode(name));
     });
     return nodes;
@@ -142,8 +139,8 @@ export class Graph {
   link(input: string | string[] | Node | Node[], output: string | string[] | Node | Node[]): Edge[] {
     let inputArr = [];
     let outputArr = [];
-    const inputNodes = [];
-    const outputNodes = [];
+    const inputNodes: Node[] = [];
+    const outputNodes: Node[] = [];
 
     if (input instanceof Array) {
       inputArr = input;
@@ -183,9 +180,9 @@ export class Graph {
       }
     }
 
-    const edges = [];
-    inputNodes.forEach(input => {
-      outputNodes.forEach(output => {
+    const edges: Edge[] = [];
+    inputNodes.forEach((input) => {
+      outputNodes.forEach((output) => {
         edges.push(this.createEdge().link(input, output));
       });
     });
@@ -202,13 +199,13 @@ export class Graph {
 }
 
 export const printGraph = (g: Graph) => {
-  Object.keys(g.nodes).forEach(name => {
+  Object.keys(g.nodes).forEach((name) => {
     const n = g.nodes[name];
-    let outputEdges = n.outputEdges.map(e => e.outputNode.name).join(', ');
+    let outputEdges = n.outputEdges.map((e: Edge) => e.outputNode?.name).join(', ');
     if (!outputEdges) {
       outputEdges = '<none>';
     }
-    let inputEdges = n.inputEdges.map(e => e.inputNode.name).join(', ');
+    let inputEdges = n.inputEdges.map((e: Edge) => e.inputNode?.name).join(', ');
     if (!inputEdges) {
       inputEdges = '<none>';
     }

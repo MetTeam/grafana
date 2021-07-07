@@ -3,11 +3,10 @@
   "name": "Gauge",
   "id": "gauge",
 
-  "state": "alpha",
-
   "info": {
+    "description": "Standard gauge visualization",
     "author": {
-      "name": "Grafana Project",
+      "name": "Grafana Labs",
       "url": "https://grafana.com"
     },
     "logos": {

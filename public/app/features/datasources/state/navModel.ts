@@ -1,8 +1,11 @@
-import { DataSource, NavModel, NavModelItem, PluginMeta } from 'app/types';
+import { DataSourceSettings, PluginType, PluginInclude, NavModel, NavModelItem } from '@grafana/data';
 import config from 'app/core/config';
+import { GenericDataSourcePlugin } from '../settings/PluginSettings';
 
-export function buildNavModel(dataSource: DataSource, pluginMeta: PluginMeta): NavModelItem {
-  const navModel = {
+export function buildNavModel(dataSource: DataSourceSettings, plugin: GenericDataSourcePlugin): NavModelItem {
+  const pluginMeta = plugin.meta;
+
+  const navModel: NavModelItem = {
     img: pluginMeta.info.logos.large,
     id: 'datasource-' + dataSource.id,
     subTitle: `Type: ${pluginMeta.name}`,
@@ -12,31 +15,59 @@ export function buildNavModel(dataSource: DataSource, pluginMeta: PluginMeta): N
     children: [
       {
         active: false,
-        icon: 'fa fa-fw fa-sliders',
+        icon: 'sliders-v-alt',
         id: `datasource-settings-${dataSource.id}`,
         text: 'Settings',
-        url: `datasources/edit/${dataSource.id}`,
+        url: `datasources/edit/${dataSource.id}/`,
       },
     ],
   };
 
+  if (plugin.configPages) {
+    for (const page of plugin.configPages) {
+      navModel.children!.push({
+        active: false,
+        text: page.title,
+        icon: page.icon,
+        url: `datasources/edit/${dataSource.id}/?page=${page.id}`,
+        id: `datasource-page-${page.id}`,
+      });
+    }
+  }
+
   if (pluginMeta.includes && hasDashboards(pluginMeta.includes)) {
-    navModel.children.push({
+    navModel.children!.push({
       active: false,
-      icon: 'fa fa-fw fa-th-large',
+      icon: 'apps',
       id: `datasource-dashboards-${dataSource.id}`,
       text: 'Dashboards',
       url: `datasources/edit/${dataSource.id}/dashboards`,
     });
   }
 
-  if (config.buildInfo.isEnterprise) {
-    navModel.children.push({
+  if (config.licenseInfo.hasLicense) {
+    navModel.children!.push({
       active: false,
-      icon: 'fa fa-fw fa-lock',
+      icon: 'lock',
       id: `datasource-permissions-${dataSource.id}`,
       text: 'Permissions',
       url: `datasources/edit/${dataSource.id}/permissions`,
+    });
+
+    navModel.children!.push({
+      active: false,
+      icon: 'info-circle',
+      id: `datasource-insights-${dataSource.id}`,
+      text: 'Insights',
+      url: `datasources/edit/${dataSource.id}/insights`,
+    });
+
+    navModel.children!.push({
+      active: false,
+      icon: 'database',
+      id: `datasource-cache-${dataSource.id}`,
+      text: 'Cache',
+      url: `datasources/edit/${dataSource.id}/cache`,
     });
   }
 
@@ -60,37 +91,44 @@ export function getDataSourceLoadingNav(pageName: string): NavModel {
       password: '',
       readOnly: false,
       type: 'Loading',
+      typeName: 'Loading',
       typeLogoUrl: 'public/img/icn-datasource.svg',
       url: '',
       user: '',
+      secureJsonFields: {},
     },
     {
-      id: '1',
-      name: '',
-      info: {
-        author: {
-          name: '',
-          url: '',
+      meta: {
+        id: '1',
+        type: PluginType.datasource,
+        name: '',
+        info: {
+          author: {
+            name: '',
+            url: '',
+          },
+          description: '',
+          links: [{ name: '', url: '' }],
+          logos: {
+            large: '',
+            small: '',
+          },
+          screenshots: [],
+          updated: '',
+          version: '',
         },
-        description: '',
-        links: [{ name: '', url: '' }],
-        logos: {
-          large: '',
-          small: '',
-        },
-        screenshots: [],
-        updated: '',
-        version: '',
+        includes: [],
+        module: '',
+        baseUrl: '',
       },
-      includes: [{ type: '', name: '', path: '' }],
-    }
+    } as any
   );
 
   let node: NavModelItem;
 
   // find active page
-  for (const child of main.children) {
-    if (child.id.indexOf(pageName) > 0) {
+  for (const child of main.children!) {
+    if (child.id!.indexOf(pageName) > 0) {
       child.active = true;
       node = child;
       break;
@@ -99,14 +137,14 @@ export function getDataSourceLoadingNav(pageName: string): NavModel {
 
   return {
     main: main,
-    node: node,
+    node: node!,
   };
 }
 
-function hasDashboards(includes) {
+function hasDashboards(includes: PluginInclude[]): boolean {
   return (
-    includes.filter(include => {
+    includes.find((include) => {
       return include.type === 'dashboard';
-    }).length > 0
+    }) !== undefined
   );
 }

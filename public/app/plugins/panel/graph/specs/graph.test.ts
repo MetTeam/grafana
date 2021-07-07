@@ -1,3 +1,14 @@
+import { GraphCtrl } from '../module';
+import { MetricsPanelCtrl } from 'app/features/panel/metrics_panel_ctrl';
+import { PanelCtrl } from 'app/features/panel/panel_ctrl';
+import config from 'app/core/config';
+
+import TimeSeries from 'app/core/time_series2';
+import $ from 'jquery';
+import { graphDirective, GraphElement } from '../graph';
+import { dateTime, EventBusSrv } from '@grafana/data';
+import { DashboardModel } from '../../../../features/dashboard/state';
+
 jest.mock('app/features/annotations/all', () => ({
   EventManager: () => {
     return {
@@ -16,32 +27,20 @@ jest.mock('app/core/core', () => ({
   },
 }));
 
-import '../module';
-import { GraphCtrl } from '../module';
-import { MetricsPanelCtrl } from 'app/features/panel/metrics_panel_ctrl';
-import { PanelCtrl } from 'app/features/panel/panel_ctrl';
-
-import config from 'app/core/config';
-
-import TimeSeries from 'app/core/time_series2';
-import moment from 'moment';
-import $ from 'jquery';
-import { graphDirective } from '../graph';
-
 const ctx = {} as any;
-let ctrl;
+let ctrl: any;
 const scope = {
   ctrl: {},
   range: {
-    from: moment([2015, 1, 1]),
-    to: moment([2015, 11, 20]),
+    from: dateTime([2015, 1, 1]),
+    to: dateTime([2015, 11, 20]),
   },
   $on: () => {},
 };
 let link;
 
 describe('grafanaGraph', () => {
-  const setupCtx = (beforeRender?) => {
+  const setupCtx = (beforeRender?: any) => {
     config.bootData = {
       user: {
         lightTheme: false,
@@ -55,6 +54,7 @@ describe('grafanaGraph', () => {
       panel: {
         events: {
           on: () => {},
+          emit: () => {},
         },
         legend: {},
         grid: {},
@@ -78,28 +78,41 @@ describe('grafanaGraph', () => {
         tooltip: {
           shared: true,
         },
+        fieldConfig: {
+          defaults: {},
+        },
       },
       renderingCompleted: jest.fn(),
       hiddenSeries: {},
       dashboard: {
         getTimezone: () => 'browser',
+        events: new EventBusSrv(),
       },
       range: {
-        from: moment([2015, 1, 1, 10]),
-        to: moment([2015, 1, 1, 22]),
+        from: dateTime([2015, 1, 1, 10]),
+        to: dateTime([2015, 1, 1, 22]),
+      },
+      annotationsSrv: {
+        getAnnotations: () => Promise.resolve({}),
       },
     } as any;
 
     ctx.data = [];
     ctx.data.push(
       new TimeSeries({
-        datapoints: [[1, 1], [2, 2]],
+        datapoints: [
+          [1, 1],
+          [2, 2],
+        ],
         alias: 'series1',
       })
     );
     ctx.data.push(
       new TimeSeries({
-        datapoints: [[10, 1], [20, 2]],
+        datapoints: [
+          [10, 1],
+          [20, 2],
+        ],
         alias: 'series2',
       })
     );
@@ -107,18 +120,25 @@ describe('grafanaGraph', () => {
     ctrl = new GraphCtrl(
       {
         $on: () => {},
+        $parent: {
+          panel: GraphCtrl.prototype.panel,
+          dashboard: GraphCtrl.prototype.dashboard,
+        },
       },
       {
         get: () => {},
-      },
-      {}
+      } as any
     );
 
     // @ts-ignore
     $.plot = ctrl.plot = jest.fn();
     scope.ctrl = ctrl;
 
-    link = graphDirective({}, {}, {}).link(scope, { width: () => 500, mouseleave: () => {}, bind: () => {} });
+    link = graphDirective({} as any, {}, {} as any).link(scope, {
+      width: () => 500,
+      mouseleave: () => {},
+      bind: () => {},
+    } as any);
     if (typeof beforeRender === 'function') {
       beforeRender();
     }
@@ -167,8 +187,11 @@ describe('grafanaGraph', () => {
   describe('sorting stacked series as legend. min descending order', () => {
     beforeEach(() => {
       setupCtx(() => {
-        ctrl.panel.legend.sort = 'min';
+        const sortKey = 'min';
+        ctrl.panel.legend.sort = sortKey;
         ctrl.panel.legend.sortDesc = true;
+        ctrl.panel.legend.alignAsTable = true;
+        ctrl.panel.legend[sortKey] = true;
         ctrl.panel.stack = true;
       });
     });
@@ -210,8 +233,11 @@ describe('grafanaGraph', () => {
   describe('sorting stacked series as legend. current descending order', () => {
     beforeEach(() => {
       setupCtx(() => {
-        ctrl.panel.legend.sort = 'current';
+        const sortKey = 'current';
+        ctrl.panel.legend.sort = sortKey;
         ctrl.panel.legend.sortDesc = true;
+        ctrl.panel.legend.alignAsTable = true;
+        ctrl.panel.legend[sortKey] = true;
         ctrl.panel.stack = true;
       });
     });
@@ -222,16 +248,43 @@ describe('grafanaGraph', () => {
     });
   });
 
+  describe('stacked series should not sort if legend is not as table or sort key column is not visible', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        const sortKey = 'min';
+        ctrl.panel.legend.sort = sortKey;
+        ctrl.panel.legend.sortDesc = true;
+        ctrl.panel.legend.alignAsTable = false;
+        ctrl.panel.legend[sortKey] = false;
+        ctrl.panel.stack = true;
+      });
+    });
+    it('highest value should be first', () => {
+      expect(ctx.plotData[0].alias).toBe('series1');
+      expect(ctx.plotData[1].alias).toBe('series2');
+    });
+  });
+
   describe('when logBase is log 10', () => {
     beforeEach(() => {
       setupCtx(() => {
         ctx.data[0] = new TimeSeries({
-          datapoints: [[2000, 1], [0.002, 2], [0, 3], [-1, 4]],
+          datapoints: [
+            [2000, 1],
+            [0.002, 2],
+            [0, 3],
+            [-1, 4],
+          ],
           alias: 'seriesAutoscale',
         });
         ctx.data[0].yaxis = 1;
         ctx.data[1] = new TimeSeries({
-          datapoints: [[2000, 1], [0.002, 2], [0, 3], [-1, 4]],
+          datapoints: [
+            [2000, 1],
+            [0.002, 2],
+            [0, 3],
+            [-1, 4],
+          ],
           alias: 'seriesFixedscale',
         });
         ctx.data[1].yaxis = 2;
@@ -271,7 +324,12 @@ describe('grafanaGraph', () => {
       setupCtx(() => {
         ctrl.panel.yaxes[0].logBase = 10;
         ctx.data[0] = new TimeSeries({
-          datapoints: [[0, 1], [0, 2], [0, 3], [0, 4]],
+          datapoints: [
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [0, 4],
+          ],
           alias: 'seriesAutoscale',
         });
         ctx.data[0].yaxis = 1;
@@ -298,7 +356,12 @@ describe('grafanaGraph', () => {
         ctrl.panel.yaxes[0].logBase = 10;
         ctrl.panel.yaxes[0].min = '0';
         ctx.data[0] = new TimeSeries({
-          datapoints: [[2000, 1], [4, 2], [500, 3], [3000, 4]],
+          datapoints: [
+            [2000, 1],
+            [4, 2],
+            [500, 3],
+            [3000, 4],
+          ],
           alias: 'seriesAutoscale',
         });
         ctx.data[0].yaxis = 1;
@@ -324,7 +387,14 @@ describe('grafanaGraph', () => {
         ctrl.panel.yaxes[0].logBase = 2;
         ctrl.panel.yaxes[0].min = '0';
         ctx.data[0] = new TimeSeries({
-          datapoints: [[2000, 1], [4, 2], [500, 3], [3000, 4], [10000, 5], [100000, 6]],
+          datapoints: [
+            [2000, 1],
+            [4, 2],
+            [500, 3],
+            [3000, 4],
+            [10000, 5],
+            [100000, 6],
+          ],
           alias: 'seriesAutoscale',
         });
         ctx.data[0].yaxis = 1;
@@ -366,7 +436,10 @@ describe('grafanaGraph', () => {
       setupCtx(() => {
         ctrl.panel.bars = true;
         ctx.data[0] = new TimeSeries({
-          datapoints: [[1, 10], [2, 20]],
+          datapoints: [
+            [1, 10],
+            [2, 20],
+          ],
           alias: 'series1',
         });
       });
@@ -443,28 +516,28 @@ describe('grafanaGraph', () => {
     describe('and the range is less than 24 hours', () => {
       beforeEach(() => {
         setupCtx(() => {
-          ctrl.range.from = moment([2015, 1, 1, 10]);
-          ctrl.range.to = moment([2015, 1, 1, 22]);
+          ctrl.range.from = dateTime([2015, 1, 1, 10]);
+          ctrl.range.to = dateTime([2015, 1, 1, 22]);
         });
       });
 
       it('should format dates as hours minutes', () => {
         const axis = ctx.plotOptions.xaxis;
-        expect(axis.timeformat).toBe('%H:%M');
+        expect(axis.timeformat).toBe('HH:mm');
       });
     });
 
     describe('and the range is less than one year', () => {
       beforeEach(() => {
         setupCtx(() => {
-          ctrl.range.from = moment([2015, 1, 1]);
-          ctrl.range.to = moment([2015, 11, 20]);
+          ctrl.range.from = dateTime([2015, 1, 1]);
+          ctrl.range.to = dateTime([2015, 11, 20]);
         });
       });
 
       it('should format dates as month days', () => {
         const axis = ctx.plotOptions.xaxis;
-        expect(axis.timeformat).toBe('%m/%d');
+        expect(axis.timeformat).toBe('MM/DD');
       });
     });
   });
@@ -476,11 +549,21 @@ describe('grafanaGraph', () => {
         ctrl.panel.stack = true;
         ctrl.hiddenSeries = {};
         ctx.data[0] = new TimeSeries({
-          datapoints: [[100, 1], [100, 2], [200, 3], [300, 4]],
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
           alias: 'series1',
         });
         ctx.data[1] = new TimeSeries({
-          datapoints: [[100, 1], [100, 2], [200, 3], [300, 4]],
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
           alias: 'series2',
         });
       });
@@ -501,11 +584,21 @@ describe('grafanaGraph', () => {
         ctrl.panel.stack = false;
         ctrl.hiddenSeries = { series2: true };
         ctx.data[0] = new TimeSeries({
-          datapoints: [[100, 1], [100, 2], [200, 3], [300, 4]],
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
           alias: 'series1',
         });
         ctx.data[1] = new TimeSeries({
-          datapoints: [[100, 1], [100, 2], [200, 3], [300, 4]],
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
           alias: 'series2',
         });
       });
@@ -516,4 +609,747 @@ describe('grafanaGraph', () => {
       expect(ctx.plotData[0].data[0][1]).toBe(2);
     });
   });
+
+  describe('when graph is histogram, and xaxis min is set', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = 150;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('should not contain values lower than min', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(200);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min is zero', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = 0;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [-100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('should not contain values lower than zero', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min is null', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = null;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [-100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis min should not affect the histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(-100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(250);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min is undefined', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = undefined;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [-100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis min should not affect the histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(-100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(250);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis max is set', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.max = 250;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('should not contain values greater than max', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(200);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis max is zero', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.max = 0;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [-100, 1],
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('should not contain values greater than zero', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(-100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(-100);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis max is null', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.max = null;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [-100, 1],
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis max should not affect the histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(-100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(250);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis max is undefined', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.max = undefined;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [-100, 1],
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis max should not should node affect the histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(-100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(250);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min and max are set', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = 150;
+        ctrl.panel.xaxis.max = 250;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('should not contain values lower than min and greater than max', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(200);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(200);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min and max are zero', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = 0;
+        ctrl.panel.xaxis.max = 0;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [-100, 1],
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis max should be ignored otherwise the bucketSize is zero', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min and max are null', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = null;
+        ctrl.panel.xaxis.max = null;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis min and max should not affect the histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min and max are undefined', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = undefined;
+        ctrl.panel.xaxis.max = undefined;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis min and max should not affect the histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min is greater than xaxis max', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = 150;
+        ctrl.panel.xaxis.max = 100;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis max should be ignored otherwise the bucketSize is negative', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(200);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  // aaa
+  describe('when graph is histogram, and xaxis min is greater than the maximum value', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = 301;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis min should be ignored otherwise the bucketSize is negative', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min is equal to the maximum value', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = 300;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis min should be ignored otherwise the bucketSize is zero', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis min is lower than the minimum value', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.min = 99;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('xaxis min should not affect the histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(280);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis max is equal to the minimum value', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.max = 100;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('should calculate correct histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(90);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(90);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis max is a lower than the minimum value', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.max = 99;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('should calculate empty histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(nonZero.length).toBe(0);
+    });
+  });
+
+  describe('when graph is histogram, and xaxis max is greater than the maximum value', () => {
+    beforeEach(() => {
+      setupCtx(() => {
+        ctrl.panel.xaxis.mode = 'histogram';
+        ctrl.panel.xaxis.max = 400;
+        ctrl.panel.stack = false;
+        ctrl.hiddenSeries = {};
+        ctx.data[0] = new TimeSeries({
+          datapoints: [
+            [100, 1],
+            [100, 2],
+            [200, 3],
+            [300, 4],
+          ],
+          alias: 'series1',
+        });
+      });
+    });
+
+    it('should calculate correct histogram', () => {
+      const nonZero = ctx.plotData[0].data.filter((t: number[]) => t[1] > 0);
+      expect(
+        Math.min.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(100);
+      expect(
+        Math.max.apply(
+          Math,
+          nonZero.map((t: number[]) => t[0])
+        )
+      ).toBe(300);
+    });
+  });
+
+  describe('getContextMenuItemsSupplier', () => {
+    describe('when called and user can edit the dashboard', () => {
+      it('then the correct menu items should be returned', () => {
+        const element = getGraphElement({ canEdit: true, canMakeEditable: false });
+
+        const result = element.getContextMenuItemsSupplier({ x: 1, y: 1 })();
+
+        expect(result.length).toEqual(1);
+        expect(result[0].items.length).toEqual(1);
+        expect(result[0].items[0].label).toEqual('Add annotation');
+        expect(result[0].items[0].icon).toEqual('comment-alt');
+        expect(result[0].items[0].onClick).toBeDefined();
+      });
+    });
+
+    describe('when called and user can make the dashboard editable', () => {
+      it('then the correct menu items should be returned', () => {
+        const element = getGraphElement({ canEdit: false, canMakeEditable: true });
+
+        const result = element.getContextMenuItemsSupplier({ x: 1, y: 1 })();
+
+        expect(result.length).toEqual(1);
+        expect(result[0].items.length).toEqual(1);
+        expect(result[0].items[0].label).toEqual('Add annotation');
+        expect(result[0].items[0].icon).toEqual('comment-alt');
+        expect(result[0].items[0].onClick).toBeDefined();
+      });
+    });
+
+    describe('when called and user can not edit the dashboard and can not make the dashboard editable', () => {
+      it('then the correct menu items should be returned', () => {
+        const element = getGraphElement({ canEdit: false, canMakeEditable: false });
+
+        const result = element.getContextMenuItemsSupplier({ x: 1, y: 1 })();
+
+        expect(result.length).toEqual(0);
+      });
+    });
+  });
 });
+
+function getGraphElement({ canEdit, canMakeEditable }: { canEdit?: boolean; canMakeEditable?: boolean } = {}) {
+  const dashboard = new DashboardModel({});
+  dashboard.events.on = jest.fn();
+  dashboard.meta.canEdit = canEdit;
+  dashboard.meta.canMakeEditable = canMakeEditable;
+  const element = new GraphElement(
+    {
+      ctrl: {
+        contextMenuCtrl: {},
+        dashboard,
+        events: { on: jest.fn() },
+      },
+    },
+    { mouseleave: jest.fn(), bind: jest.fn() } as any,
+    {} as any
+  );
+
+  return element;
+}

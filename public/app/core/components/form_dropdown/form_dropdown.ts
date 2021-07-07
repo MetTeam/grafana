@@ -1,7 +1,9 @@
-import _ from 'lodash';
+import { debounce, find, indexOf, map, isObject, escape, unescape } from 'lodash';
 import coreModule from '../../core_module';
+import { ISCEService } from 'angular';
+import { promiseToDigest } from 'app/core/utils/promiseToDigest';
 
-function typeaheadMatcher(this: any, item) {
+function typeaheadMatcher(this: any, item: string) {
   let str = this.query;
   if (str === '') {
     return true;
@@ -16,8 +18,8 @@ function typeaheadMatcher(this: any, item) {
 }
 
 export class FormDropdownCtrl {
-  inputElement: any;
-  linkElement: any;
+  inputElement: JQLite;
+  linkElement: JQLite;
   model: any;
   display: any;
   text: any;
@@ -34,18 +36,23 @@ export class FormDropdownCtrl {
   lookupText: boolean;
   placeholder: any;
   startOpen: any;
-  debounce: number;
+  debounce: boolean;
 
   /** @ngInject */
-  constructor(private $scope, $element, private $sce, private templateSrv, private $q) {
+  constructor(private $scope: any, $element: JQLite, private $sce: ISCEService, private templateSrv: any) {
     this.inputElement = $element.find('input').first();
     this.linkElement = $element.find('a').first();
     this.linkMode = true;
     this.cancelBlur = null;
+    this.labelMode = false;
+    this.lookupText = false;
+    this.debounce = false;
 
     // listen to model changes
     $scope.$watch('ctrl.model', this.modelChanged.bind(this));
+  }
 
+  $onInit() {
     if (this.labelMode) {
       this.cssClasses = 'gf-form-label ' + this.cssClass;
     } else {
@@ -68,23 +75,23 @@ export class FormDropdownCtrl {
     // modify typeahead lookup
     // this = typeahead
     const typeahead = this.inputElement.data('typeahead');
-    typeahead.lookup = function() {
+    typeahead.lookup = function () {
       this.query = this.$element.val() || '';
       this.source(this.query, this.process.bind(this));
     };
 
     if (this.debounce) {
-      typeahead.lookup = _.debounce(typeahead.lookup, 500, { leading: true });
+      typeahead.lookup = debounce(typeahead.lookup, 500, { leading: true });
     }
 
-    this.linkElement.keydown(evt => {
+    this.linkElement.keydown((evt) => {
       // trigger typeahead on down arrow or enter key
       if (evt.keyCode === 40 || evt.keyCode === 13) {
         this.linkElement.click();
       }
     });
 
-    this.inputElement.keydown(evt => {
+    this.inputElement.keydown((evt) => {
       if (evt.keyCode === 13) {
         setTimeout(() => {
           this.inputElement.blur();
@@ -99,26 +106,22 @@ export class FormDropdownCtrl {
     }
   }
 
-  getOptionsInternal(query) {
-    const result = this.getOptions({ $query: query });
-    if (this.isPromiseLike(result)) {
-      return result;
-    }
-    return this.$q.when(result);
+  getOptionsInternal(query: string) {
+    return promiseToDigest(this.$scope)(Promise.resolve(this.getOptions({ $query: query })));
   }
 
-  isPromiseLike(obj) {
+  isPromiseLike(obj: any) {
     return obj && typeof obj.then === 'function';
   }
 
   modelChanged() {
-    if (_.isObject(this.model)) {
-      this.updateDisplay(this.model.text);
+    if (isObject(this.model)) {
+      this.updateDisplay((this.model as any).text);
     } else {
       // if we have text use it
       if (this.lookupText) {
-        this.getOptionsInternal('').then(options => {
-          const item = _.find(options, { value: this.model });
+        this.getOptionsInternal('').then((options: any) => {
+          const item: any = find(options, { value: this.model });
           this.updateDisplay(item ? item.text : this.model);
         });
       } else {
@@ -127,18 +130,18 @@ export class FormDropdownCtrl {
     }
   }
 
-  typeaheadSource(query, callback) {
-    this.getOptionsInternal(query).then(options => {
+  typeaheadSource(query: string, callback: (res: any) => void) {
+    this.getOptionsInternal(query).then((options: any) => {
       this.optionCache = options;
 
       // extract texts
-      const optionTexts = _.map(options, op => {
-        return _.escape(op.text);
+      const optionTexts = map(options, (op: any) => {
+        return escape(op.text);
       });
 
       // add custom values
       if (this.allowCustom && this.text !== '') {
-        if (_.indexOf(optionTexts, this.text) === -1) {
+        if (indexOf(optionTexts, this.text) === -1) {
           optionTexts.unshift(this.text);
         }
       }
@@ -147,7 +150,7 @@ export class FormDropdownCtrl {
     });
   }
 
-  typeaheadUpdater(text) {
+  typeaheadUpdater(text: string) {
     if (text === this.text) {
       clearTimeout(this.cancelBlur);
       this.inputElement.focus();
@@ -159,7 +162,7 @@ export class FormDropdownCtrl {
     return text;
   }
 
-  switchToLink(fromClick) {
+  switchToLink(fromClick: boolean) {
     if (this.linkMode && !fromClick) {
       return;
     }
@@ -169,7 +172,7 @@ export class FormDropdownCtrl {
     this.linkMode = true;
     this.inputElement.hide();
     this.linkElement.show();
-    this.updateValue(this.inputElement.val());
+    this.updateValue(this.inputElement.val() as string);
   }
 
   inputBlur() {
@@ -178,26 +181,26 @@ export class FormDropdownCtrl {
     this.cancelBlur = setTimeout(this.switchToLink.bind(this), 200);
   }
 
-  updateValue(text) {
-    text = _.unescape(text);
+  updateValue(text: string) {
+    text = unescape(text);
 
     if (text === '' || this.text === text) {
       return;
     }
 
     this.$scope.$apply(() => {
-      const option = _.find(this.optionCache, { text: text });
+      const option: any = find(this.optionCache, { text: text });
 
       if (option) {
-        if (_.isObject(this.model)) {
+        if (isObject(this.model)) {
           this.model = option;
         } else {
           this.model = option.value;
         }
         this.text = option.text;
       } else if (this.allowCustom) {
-        if (_.isObject(this.model)) {
-          this.model.text = this.model.value = text;
+        if (isObject(this.model)) {
+          (this.model as any).text = (this.model as any).value = text;
         } else {
           this.model = text;
         }
@@ -214,13 +217,13 @@ export class FormDropdownCtrl {
     });
   }
 
-  updateDisplay(text) {
+  updateDisplay(text: string) {
     this.text = text;
     this.display = this.$sce.trustAsHtml(this.templateSrv.highlightVariablesAsHtml(text));
   }
 
   open() {
-    this.inputElement.css('width', Math.max(this.linkElement.width(), 80) + 16 + 'px');
+    this.inputElement.css('width', Math.max(this.linkElement.width()!, 80) + 16 + 'px');
 
     this.inputElement.show();
     this.inputElement.focus();

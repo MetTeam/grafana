@@ -1,6 +1,6 @@
 import React, { PureComponent } from 'react';
-import Remarkable from 'remarkable';
-import { getBackendSrv } from '../../services/backend_srv';
+import { renderMarkdown } from '@grafana/data';
+import { getBackendSrv } from '@grafana/runtime';
 
 interface Props {
   plugin: {
@@ -37,9 +37,8 @@ export class PluginHelp extends PureComponent<Props, State> {
 
     getBackendSrv()
       .get(`/api/plugins/${plugin.id}/markdown/${type}`)
-      .then(response => {
-        const markdown = new Remarkable();
-        const helpHtml = markdown.render(response);
+      .then((response: string) => {
+        const helpHtml = renderMarkdown(response);
 
         if (response === '' && type === 'help') {
           this.setState({
@@ -72,7 +71,7 @@ export class PluginHelp extends PureComponent<Props, State> {
     }
 
     if (isError) {
-      return <h3>'Error occurred when loading help'</h3>;
+      return <h3>&apos;Error occurred when loading help&apos;</h3>;
     }
 
     if (type === 'panel_help' && help === '') {

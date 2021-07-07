@@ -1,37 +1,58 @@
-import { FolderDTO, NavModelItem, NavModel } from 'app/types';
+import { NavModel, NavModelItem } from '@grafana/data';
+
+import { FolderDTO } from 'app/types';
+import { getConfig } from '../../../core/config';
 
 export function buildNavModel(folder: FolderDTO): NavModelItem {
-  return {
-    icon: 'fa fa-folder-open',
+  const model = {
+    icon: 'folder',
     id: 'manage-folder',
-    subTitle: 'Manage folder dashboards & permissions',
+    subTitle: 'Manage folder dashboards and permissions',
     url: '',
     text: folder.title,
     breadcrumbs: [{ title: 'Dashboards', url: 'dashboards' }],
     children: [
       {
         active: false,
-        icon: 'fa fa-fw fa-th-large',
+        icon: 'apps',
         id: `folder-dashboards-${folder.uid}`,
         text: 'Dashboards',
         url: folder.url,
       },
-      {
-        active: false,
-        icon: 'fa fa-fw fa-lock',
-        id: `folder-permissions-${folder.uid}`,
-        text: 'Permissions',
-        url: `${folder.url}/permissions`,
-      },
-      {
-        active: false,
-        icon: 'fa fa-fw fa-cog',
-        id: `folder-settings-${folder.uid}`,
-        text: 'Settings',
-        url: `${folder.url}/settings`,
-      },
     ],
   };
+
+  if (folder.canAdmin) {
+    model.children.push({
+      active: false,
+      icon: 'lock',
+      id: `folder-permissions-${folder.uid}`,
+      text: 'Permissions',
+      url: `${folder.url}/permissions`,
+    });
+  }
+
+  if (folder.canSave) {
+    model.children.push({
+      active: false,
+      icon: 'cog',
+      id: `folder-settings-${folder.uid}`,
+      text: 'Settings',
+      url: `${folder.url}/settings`,
+    });
+  }
+
+  if (getConfig().featureToggles.panelLibrary) {
+    model.children.push({
+      active: false,
+      icon: 'library-panel',
+      id: `folder-library-panels-${folder.uid}`,
+      text: 'Panels',
+      url: `${folder.url}/library-panels`,
+    });
+  }
+
+  return model;
 }
 
 export function getLoadingNav(tabIndex: number): NavModel {
@@ -40,14 +61,16 @@ export function getLoadingNav(tabIndex: number): NavModel {
     uid: 'loading',
     title: 'Loading',
     url: 'url',
-    canSave: false,
+    canSave: true,
+    canEdit: true,
+    canAdmin: true,
     version: 0,
   });
 
-  main.children[tabIndex].active = true;
+  main.children![tabIndex].active = true;
 
   return {
     main: main,
-    node: main.children[tabIndex],
+    node: main.children![tabIndex],
   };
 }

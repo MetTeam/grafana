@@ -2,6 +2,7 @@ package notifiers
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"os"
@@ -10,8 +11,8 @@ import (
 
 	"github.com/grafana/grafana/pkg/bus"
 	"github.com/grafana/grafana/pkg/components/simplejson"
-	"github.com/grafana/grafana/pkg/log"
-	m "github.com/grafana/grafana/pkg/models"
+	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/models"
 	"github.com/grafana/grafana/pkg/services/alerting"
 	"github.com/grafana/grafana/pkg/setting"
 )
@@ -21,18 +22,30 @@ func init() {
 		Type:        "discord",
 		Name:        "Discord",
 		Description: "Sends notifications to Discord",
-		Factory:     NewDiscordNotifier,
-		OptionsTemplate: `
-      <h3 class="page-heading">Discord settings</h3>
-      <div class="gf-form">
-        <span class="gf-form-label width-14">Webhook URL</span>
-        <input type="text" required class="gf-form-input max-width-22" ng-model="ctrl.model.settings.url" placeholder="Discord webhook URL"></input>
-      </div>
-    `,
+		Factory:     newDiscordNotifier,
+		Heading:     "Discord settings",
+		Options: []alerting.NotifierOption{
+			{
+				Label:        "Message Content",
+				Description:  "Mention a group using @ or a user using <@ID> when notifying in a channel",
+				Element:      alerting.ElementTypeInput,
+				InputType:    alerting.InputTypeText,
+				PropertyName: "content",
+			},
+			{
+				Label:        "Webhook URL",
+				Element:      alerting.ElementTypeInput,
+				InputType:    alerting.InputTypeText,
+				Placeholder:  "Discord webhook URL",
+				PropertyName: "url",
+				Required:     true,
+			},
+		},
 	})
 }
 
-func NewDiscordNotifier(model *m.AlertNotification) (alerting.Notifier, error) {
+func newDiscordNotifier(model *models.AlertNotification) (alerting.Notifier, error) {
+	content := model.Settings.Get("content").MustString()
 	url := model.Settings.Get("url").MustString()
 	if url == "" {
 		return nil, alerting.ValidationError{Reason: "Could not find webhook url property in settings"}
@@ -40,35 +53,45 @@ func NewDiscordNotifier(model *m.AlertNotification) (alerting.Notifier, error) {
 
 	return &DiscordNotifier{
 		NotifierBase: NewNotifierBase(model),
+		Content:      content,
 		WebhookURL:   url,
 		log:          log.New("alerting.notifier.discord"),
 	}, nil
 }
 
+// DiscordNotifier is responsible for sending alert
+// notifications to discord.
 type DiscordNotifier struct {
 	NotifierBase
+	Content    string
 	WebhookURL string
 	log        log.Logger
 }
 
-func (this *DiscordNotifier) Notify(evalContext *alerting.EvalContext) error {
-	this.log.Info("Sending alert notification to", "webhook_url", this.WebhookURL)
+// Notify send an alert notification to Discord.
+func (dn *DiscordNotifier) Notify(evalContext *alerting.EvalContext) error {
+	dn.log.Info("Sending alert notification to", "webhook_url", dn.WebhookURL)
 
-	ruleUrl, err := evalContext.GetRuleUrl()
+	ruleURL, err := evalContext.GetRuleURL()
 	if err != nil {
-		this.log.Error("Failed get rule link", "error", err)
+		dn.log.Error("Failed get rule link", "error", err)
 		return err
 	}
 
 	bodyJSON := simplejson.New()
 	bodyJSON.Set("username", "Grafana")
 
+	if dn.Content != "" {
+		bodyJSON.Set("content", dn.Content)
+	}
+
 	fields := make([]map[string]interface{}, 0)
 
 	for _, evt := range evalContext.EvalMatches {
-
 		fields = append(fields, map[string]interface{}{
-			"name":   evt.Metric,
+			// Discord uniquely does not send the alert if the metric field is empty,
+			// which it can be in some cases
+			"name":   notEmpty(evt.Metric),
 			"value":  evt.Value.FullString(),
 			"inline": true,
 		})
@@ -83,9 +106,9 @@ func (this *DiscordNotifier) Notify(evalContext *alerting.EvalContext) error {
 
 	embed := simplejson.New()
 	embed.Set("title", evalContext.GetNotificationTitle())
-	//Discord takes integer for color
+	// Discord takes integer for color
 	embed.Set("color", color)
-	embed.Set("url", ruleUrl)
+	embed.Set("url", ruleURL)
 	embed.Set("description", evalContext.Rule.Message)
 	embed.Set("type", "rich")
 	embed.Set("fields", fields)
@@ -94,80 +117,109 @@ func (this *DiscordNotifier) Notify(evalContext *alerting.EvalContext) error {
 	var image map[string]interface{}
 	var embeddedImage = false
 
-	if evalContext.ImagePublicUrl != "" {
-		image = map[string]interface{}{
-			"url": evalContext.ImagePublicUrl,
+	if dn.NeedsImage() {
+		if evalContext.ImagePublicURL != "" {
+			image = map[string]interface{}{
+				"url": evalContext.ImagePublicURL,
+			}
+			embed.Set("image", image)
+		} else {
+			image = map[string]interface{}{
+				"url": "attachment://graph.png",
+			}
+			embed.Set("image", image)
+			embeddedImage = true
 		}
-		embed.Set("image", image)
-	} else {
-		image = map[string]interface{}{
-			"url": "attachment://graph.png",
-		}
-		embed.Set("image", image)
-		embeddedImage = true
 	}
 
 	bodyJSON.Set("embeds", []interface{}{embed})
 
 	json, _ := bodyJSON.MarshalJSON()
 
-	content_type := "application/json"
-
-	var body []byte
-
-	if embeddedImage {
-
-		var b bytes.Buffer
-
-		w := multipart.NewWriter(&b)
-
-		f, err := os.Open(evalContext.ImageOnDiskPath)
-
-		if err != nil {
-			this.log.Error("Can't open graph file", err)
-			return err
-		}
-
-		defer f.Close()
-
-		fw, err := w.CreateFormField("payload_json")
-		if err != nil {
-			return err
-		}
-
-		if _, err = fw.Write([]byte(string(json))); err != nil {
-			return err
-		}
-
-		fw, err = w.CreateFormFile("file", "graph.png")
-		if err != nil {
-			return err
-		}
-
-		if _, err = io.Copy(fw, f); err != nil {
-			return err
-		}
-
-		w.Close()
-
-		body = b.Bytes()
-		content_type = w.FormDataContentType()
-
-	} else {
-		body = json
+	cmd := &models.SendWebhookSync{
+		Url:         dn.WebhookURL,
+		HttpMethod:  "POST",
+		ContentType: "application/json",
 	}
 
-	cmd := &m.SendWebhookSync{
-		Url:         this.WebhookURL,
-		Body:        string(body),
-		HttpMethod:  "POST",
-		ContentType: content_type,
+	if !embeddedImage {
+		cmd.Body = string(json)
+	} else {
+		err := dn.embedImage(cmd, evalContext.ImageOnDiskPath, json)
+		if err != nil {
+			dn.log.Error("failed to embed image", "error", err)
+			return err
+		}
 	}
 
 	if err := bus.DispatchCtx(evalContext.Ctx, cmd); err != nil {
-		this.log.Error("Failed to send notification to Discord", "error", err)
+		dn.log.Error("Failed to send notification to Discord", "error", err)
 		return err
 	}
 
 	return nil
+}
+
+func (dn *DiscordNotifier) embedImage(cmd *models.SendWebhookSync, imagePath string, existingJSONBody []byte) error {
+	// nolint:gosec
+	// We can ignore the gosec G304 warning on this one because `imagePath` comes
+	// from the alert `evalContext` that generates the images.
+	f, err := os.Open(imagePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			cmd.Body = string(existingJSONBody)
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			dn.log.Warn("Failed to close file", "path", imagePath, "err", err)
+		}
+	}()
+
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	defer func() {
+		if err := w.Close(); err != nil {
+			// Should be OK since we already close it on non-error path
+			dn.log.Warn("Failed to close multipart writer", "err", err)
+		}
+	}()
+	fw, err := w.CreateFormField("payload_json")
+	if err != nil {
+		return err
+	}
+
+	if _, err = fw.Write([]byte(string(existingJSONBody))); err != nil {
+		return err
+	}
+
+	fw, err = w.CreateFormFile("file", "graph.png")
+	if err != nil {
+		return err
+	}
+
+	if _, err = io.Copy(fw, f); err != nil {
+		return err
+	}
+
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	cmd.Body = b.String()
+	cmd.ContentType = w.FormDataContentType()
+
+	return nil
+}
+
+func notEmpty(metric string) string {
+	if metric == "" {
+		return "<NO_METRIC_NAME>"
+	}
+
+	return metric
 }

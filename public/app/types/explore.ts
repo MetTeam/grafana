@@ -1,131 +1,167 @@
-import { Value } from 'slate';
+import { Unsubscribable } from 'rxjs';
+import {
+  AbsoluteTimeRange,
+  DataFrame,
+  DataQuery,
+  DataQueryRequest,
+  DataSourceApi,
+  HistoryItem,
+  LogsModel,
+  PanelData,
+  QueryHint,
+  RawTimeRange,
+  TimeRange,
+  EventBusExtended,
+} from '@grafana/data';
 
-import { DataQuery } from './series';
-import { RawTimeRange } from '@grafana/ui';
-import TableModel from 'app/core/table_model';
-import { LogsModel } from 'app/core/logs_model';
-import { DataSourceSelectItem } from 'app/types/datasources';
-
-export interface CompletionItem {
-  /**
-   * The label of this completion item. By default
-   * this is also the text that is inserted when selecting
-   * this completion.
-   */
-  label: string;
-  /**
-   * The kind of this completion item. Based on the kind
-   * an icon is chosen by the editor.
-   */
-  kind?: string;
-  /**
-   * A human-readable string with additional information
-   * about this item, like type or symbol information.
-   */
-  detail?: string;
-  /**
-   * A human-readable string, can be Markdown, that represents a doc-comment.
-   */
-  documentation?: string;
-  /**
-   * A string that should be used when comparing this item
-   * with other items. When `falsy` the `label` is used.
-   */
-  sortText?: string;
-  /**
-   * A string that should be used when filtering a set of
-   * completion items. When `falsy` the `label` is used.
-   */
-  filterText?: string;
-  /**
-   * A string or snippet that should be inserted in a document when selecting
-   * this completion. When `falsy` the `label` is used.
-   */
-  insertText?: string;
-  /**
-   * Delete number of characters before the caret position,
-   * by default the letters from the beginning of the word.
-   */
-  deleteBackwards?: number;
-  /**
-   * Number of steps to move after the insertion, can be negative.
-   */
-  move?: number;
+export enum ExploreId {
+  left = 'left',
+  right = 'right',
 }
 
-export interface CompletionItemGroup {
+export type ExploreQueryParams = {
+  left: string;
+  right: string;
+};
+
+/**
+ * Global Explore state
+ */
+export interface ExploreState {
   /**
-   * Label that will be displayed for all entries of this group.
+   * True if time interval for panels are synced. Only possible with split mode.
    */
-  label: string;
+  syncedTimes: boolean;
   /**
-   * List of suggestions of this group.
+   * Explore state of the left split (left is default in non-split view).
    */
-  items: CompletionItem[];
+  left: ExploreItemState;
   /**
-   * If true, match only by prefix (and not mid-word).
+   * Explore state of the right area in split view.
    */
-  prefixMatch?: boolean;
+  right?: ExploreItemState;
   /**
-   * If true, do not filter items in this group based on the search.
+   * History of all queries
    */
-  skipFilter?: boolean;
+  richHistory: RichHistoryQuery[];
+}
+
+export interface ExploreItemState {
   /**
-   * If true, do not sort items.
+   * Width used for calculating the graph interval (can't have more datapoints than pixels)
    */
-  skipSort?: boolean;
-}
-
-export interface HistoryItem {
-  ts: number;
-  query: DataQuery;
-}
-
-export abstract class LanguageProvider {
-  datasource: any;
-  request: (url) => Promise<any>;
+  containerWidth: number;
   /**
-   * Returns startTask that resolves with a task list when main syntax is loaded.
-   * Task list consists of secondary promises that load more detailed language features.
+   * Datasource instance that has been selected. Datasource-specific logic can be run on this object.
    */
-  start: () => Promise<any[]>;
-  startTask?: Promise<any[]>;
+  datasourceInstance?: DataSourceApi | null;
+  /**
+   * True if there is no datasource to be selected.
+   */
+  datasourceMissing: boolean;
+  /**
+   * Emitter to send events to the rest of Grafana.
+   */
+  eventBridge: EventBusExtended;
+  /**
+   * List of timeseries to be shown in the Explore graph result viewer.
+   */
+  graphResult: DataFrame[] | null;
+  /**
+   * History of recent queries. Datasource-specific and initialized via localStorage.
+   */
+  history: HistoryItem[];
+  /**
+   * Queries for this Explore, e.g., set via URL. Each query will be
+   * converted to a query row.
+   */
+  queries: DataQuery[];
+  /**
+   * True if this Explore area has been initialized.
+   * Used to distinguish URL state injection versus split view state injection.
+   */
+  initialized: boolean;
+  /**
+   * Log line substrings to be highlighted as you type in a query field.
+   * Currently supports only the first query row.
+   */
+  logsHighlighterExpressions?: string[];
+  /**
+   * Log query result to be displayed in the logs result viewer.
+   */
+  logsResult: LogsModel | null;
+
+  /**
+   * Time range for this Explore. Managed by the time picker and used by all query runs.
+   */
+  range: TimeRange;
+
+  absoluteRange: AbsoluteTimeRange;
+  /**
+   * True if scanning for more results is active.
+   */
+  scanning: boolean;
+  /**
+   * Current scanning range to be shown to the user while scanning is active.
+   */
+  scanRange?: RawTimeRange;
+
+  loading: boolean;
+  /**
+   * Table model that combines all query table results into a single table.
+   */
+  tableResult: DataFrame | null;
+
+  /**
+   * React keys for rendering of QueryRows
+   */
+  queryKeys: string[];
+
+  /**
+   * How often query should be refreshed
+   */
+  refreshInterval?: string;
+
+  latency: number;
+
+  /**
+   * If true, the view is in live tailing mode.
+   */
+  isLive: boolean;
+
+  /**
+   * If true, the live tailing view is paused.
+   */
+  isPaused: boolean;
+
+  querySubscription?: Unsubscribable;
+
+  queryResponse: PanelData;
+
+  /**
+   * Panel Id that is set if we come to explore from a penel. Used so we can get back to it and optionally modify the
+   * query of that panel.
+   */
+  originPanelId?: number | null;
+
+  showLogs?: boolean;
+  showMetrics?: boolean;
+  showTable?: boolean;
+  showTrace?: boolean;
+  showNodeGraph?: boolean;
 }
 
-export interface TypeaheadInput {
-  text: string;
-  prefix: string;
-  wrapperClasses: string[];
-  labelKey?: string;
-  value?: Value;
+export interface ExploreUpdateState {
+  datasource: boolean;
+  queries: boolean;
+  range: boolean;
+  mode: boolean;
 }
 
-export interface TypeaheadOutput {
-  context?: string;
-  refresher?: Promise<{}>;
-  suggestions: CompletionItemGroup[];
-}
-
-export interface QueryFix {
-  type: string;
-  label: string;
-  action?: QueryFixAction;
-}
-
-export interface QueryFixAction {
-  type: string;
-  query?: string;
-  preventSubmit?: boolean;
-}
-
-export interface QueryHint {
-  type: string;
-  label: string;
-  fix?: QueryFix;
-}
-
-export interface QueryHintGetter {
-  (query: DataQuery, results: any[], ...rest: any): QueryHint[];
+export interface QueryOptions {
+  minInterval?: string;
+  maxDataPoints?: number;
+  liveStreaming?: boolean;
 }
 
 export interface QueryTransaction {
@@ -134,53 +170,34 @@ export interface QueryTransaction {
   error?: string | JSX.Element;
   hints?: QueryHint[];
   latency: number;
-  options: any;
-  query: DataQuery;
+  request: DataQueryRequest;
+  queries: DataQuery[];
   result?: any; // Table model / Timeseries[] / Logs
-  resultType: ResultType;
-  rowIndex: number;
   scanning?: boolean;
 }
 
-export interface TextMatch {
-  text: string;
-  start: number;
-  length: number;
-  end: number;
+export type RichHistoryQuery = {
+  ts: number;
+  datasourceName: string;
+  datasourceId: string;
+  starred: boolean;
+  comment: string;
+  queries: DataQuery[];
+  sessionName: string;
+  timeRange?: string;
+};
+
+export interface ExplorePanelData extends PanelData {
+  graphFrames: DataFrame[];
+  tableFrames: DataFrame[];
+  logsFrames: DataFrame[];
+  traceFrames: DataFrame[];
+  nodeGraphFrames: DataFrame[];
+  graphResult: DataFrame[] | null;
+  tableResult: DataFrame | null;
+  logsResult: LogsModel | null;
 }
 
-export interface ExploreState {
-  StartPage?: any;
-  datasource: any;
-  datasourceError: any;
-  datasourceLoading: boolean | null;
-  datasourceMissing: boolean;
-  exploreDatasources: DataSourceSelectItem[];
-  graphInterval: number; // in ms
-  graphResult?: any[];
-  history: HistoryItem[];
-  initialDatasource?: string;
-  initialQueries: DataQuery[];
-  logsHighlighterExpressions?: string[];
-  logsResult?: LogsModel;
-  queryTransactions: QueryTransaction[];
-  range: RawTimeRange;
-  scanning?: boolean;
-  scanRange?: RawTimeRange;
-  showingGraph: boolean;
-  showingLogs: boolean;
-  showingStartPage?: boolean;
-  showingTable: boolean;
-  supportsGraph: boolean | null;
-  supportsLogs: boolean | null;
-  supportsTable: boolean | null;
-  tableResult?: TableModel;
-}
-
-export interface ExploreUrlState {
-  datasource: string;
-  queries: any[]; // Should be a DataQuery, but we're going to strip refIds, so typing makes less sense
-  range: RawTimeRange;
-}
-
-export type ResultType = 'Graph' | 'Logs' | 'Table';
+export type SplitOpen = <T extends DataQuery = any>(
+  options?: { datasourceUid: string; query: T; range?: TimeRange } | undefined
+) => void;

@@ -1,43 +1,35 @@
-import { LayoutMode } from '../core/components/LayoutSelector/LayoutSelector';
-import { Plugin, PluginExports, PluginMeta } from './plugins';
-
-export interface DataSource {
-  id: number;
-  orgId: number;
-  name: string;
-  typeLogoUrl: string;
-  type: string;
-  access: string;
-  url: string;
-  password: string;
-  user: string;
-  database: string;
-  basicAuth: boolean;
-  basicAuthPassword: string;
-  basicAuthUser: string;
-  isDefault: boolean;
-  jsonData: { authType: string; defaultRegion: string };
-  readOnly: boolean;
-  withCredentials: boolean;
-  meta?: PluginMeta;
-  pluginExports?: PluginExports;
-}
-
-export interface DataSourceSelectItem {
-  name: string;
-  value: string | null;
-  meta: PluginMeta;
-  sort: string;
-}
+import { DataSourcePluginMeta, DataSourceSettings, LayoutMode } from '@grafana/data';
+import { GenericDataSourcePlugin } from 'app/features/datasources/settings/PluginSettings';
+import { HealthCheckResultDetails } from '@grafana/runtime/src/utils/DataSourceWithBackend';
 
 export interface DataSourcesState {
-  dataSources: DataSource[];
+  dataSources: DataSourceSettings[];
   searchQuery: string;
   dataSourceTypeSearchQuery: string;
   layoutMode: LayoutMode;
   dataSourcesCount: number;
-  dataSourceTypes: Plugin[];
-  dataSource: DataSource;
-  dataSourceMeta: Plugin;
+  dataSource: DataSourceSettings;
+  dataSourceMeta: DataSourcePluginMeta;
   hasFetched: boolean;
+  isLoadingDataSources: boolean;
+  plugins: DataSourcePluginMeta[];
+  categories: DataSourcePluginCategory[];
+}
+
+export interface TestingStatus {
+  message?: string | null;
+  status?: string | null;
+  details?: HealthCheckResultDetails;
+}
+
+export interface DataSourceSettingsState {
+  plugin?: GenericDataSourcePlugin | null;
+  testingStatus?: TestingStatus;
+  loadError?: string | null;
+}
+
+export interface DataSourcePluginCategory {
+  id: string;
+  title: string;
+  plugins: DataSourcePluginMeta[];
 }

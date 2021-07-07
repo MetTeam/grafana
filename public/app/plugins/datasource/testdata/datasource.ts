@@ -1,88 +1,121 @@
-import _ from 'lodash';
-import TableModel from 'app/core/table_model';
+import { from, merge, Observable, of } from 'rxjs';
+import { delay } from 'rxjs/operators';
 
-class TestDataDatasource {
-  id: any;
+import {
+  AnnotationEvent,
+  ArrayDataFrame,
+  DataFrame,
+  DataQueryRequest,
+  DataQueryResponse,
+  DataSourceInstanceSettings,
+  DataTopic,
+  LiveChannelScope,
+  LoadingState,
+  TimeRange,
+} from '@grafana/data';
+import { Scenario, TestDataQuery } from './types';
+import { DataSourceWithBackend, getBackendSrv, getGrafanaLiveSrv, getTemplateSrv, TemplateSrv } from '@grafana/runtime';
+import { queryMetricTree } from './metricTree';
+import { runStream } from './runStreams';
+import { getSearchFilterScopedVar } from 'app/features/variables/utils';
+import { TestDataVariableSupport } from './variables';
+import { generateRandomNodes, savedNodesResponse } from './nodeGraphUtils';
 
-  /** @ngInject */
-  constructor(instanceSettings, private backendSrv, private $q) {
-    this.id = instanceSettings.id;
+export class TestDataDataSource extends DataSourceWithBackend<TestDataQuery> {
+  scenariosCache?: Promise<Scenario[]>;
+
+  constructor(
+    instanceSettings: DataSourceInstanceSettings,
+    private readonly templateSrv: TemplateSrv = getTemplateSrv()
+  ) {
+    super(instanceSettings);
+    this.variables = new TestDataVariableSupport();
   }
 
-  query(options) {
-    const queries = _.filter(options.targets, item => {
-      return item.hide !== true;
-    }).map(item => {
-      return {
-        refId: item.refId,
-        scenarioId: item.scenarioId,
-        intervalMs: options.intervalMs,
-        maxDataPoints: options.maxDataPoints,
-        stringInput: item.stringInput,
-        points: item.points,
-        alias: item.alias,
-        datasourceId: this.id,
-      };
-    });
+  query(options: DataQueryRequest<TestDataQuery>): Observable<DataQueryResponse> {
+    const backendQueries: TestDataQuery[] = [];
+    const streams: Array<Observable<DataQueryResponse>> = [];
 
-    if (queries.length === 0) {
-      return this.$q.when({ data: [] });
+    // Start streams and prepare queries
+    for (const target of options.targets) {
+      if (target.hide) {
+        continue;
+      }
+
+      switch (target.scenarioId) {
+        case 'live':
+          streams.push(runGrafanaLiveQuery(target, options));
+          break;
+        case 'streaming_client':
+          streams.push(runStream(target, options));
+          break;
+        case 'grafana_api':
+          streams.push(runGrafanaAPI(target, options));
+          break;
+        case 'annotations':
+          streams.push(this.annotationDataTopicTest(target, options));
+          break;
+        case 'variables-query':
+          streams.push(this.variablesQuery(target, options));
+          break;
+        case 'node_graph':
+          streams.push(this.nodesQuery(target, options));
+          break;
+        default:
+          backendQueries.push(target);
+      }
     }
 
-    return this.backendSrv
-      .datasourceRequest({
-        method: 'POST',
-        url: '/api/tsdb/query',
-        data: {
-          from: options.range.from.valueOf().toString(),
-          to: options.range.to.valueOf().toString(),
-          queries: queries,
-        },
-      })
-      .then(res => {
-        const data = [];
+    if (backendQueries.length) {
+      const backendOpts = {
+        ...options,
+        targets: backendQueries,
+      };
+      streams.push(super.query(backendOpts));
+    }
 
-        if (res.data.results) {
-          _.forEach(res.data.results, queryRes => {
-            if (queryRes.tables) {
-              for (const table of queryRes.tables) {
-                const model = new TableModel();
-                model.rows = table.rows;
-                model.columns = table.columns;
+    if (streams.length === 0) {
+      return of({ data: [] });
+    }
 
-                data.push(model);
-              }
-            }
-            for (const series of queryRes.series) {
-              data.push({
-                target: series.name,
-                datapoints: series.points,
-              });
-            }
-          });
-        }
-
-        return { data: data };
-      });
+    return merge(...streams);
   }
 
-  annotationQuery(options) {
-    let timeWalker = options.range.from.valueOf();
-    const to = options.range.to.valueOf();
-    const events = [];
-    const eventCount = 10;
-    const step = (to - timeWalker) / eventCount;
+  annotationDataTopicTest(target: TestDataQuery, req: DataQueryRequest<TestDataQuery>): Observable<DataQueryResponse> {
+    const events = this.buildFakeAnnotationEvents(req.range, 10);
+    const dataFrame = new ArrayDataFrame(events);
+    dataFrame.meta = { dataTopic: DataTopic.Annotations };
 
-    for (let i = 0; i < eventCount; i++) {
+    return of({ key: target.refId, data: [dataFrame] }).pipe(delay(100));
+  }
+
+  buildFakeAnnotationEvents(range: TimeRange, count: number): AnnotationEvent[] {
+    let timeWalker = range.from.valueOf();
+    const to = range.to.valueOf();
+    const events = [];
+    const step = (to - timeWalker) / count;
+
+    for (let i = 0; i < count; i++) {
       events.push({
-        annotation: options.annotation,
         time: timeWalker,
         text: 'This is the text, <a href="https://grafana.com">Grafana.com</a>',
         tags: ['text', 'server'],
       });
       timeWalker += step;
     }
-    return this.$q.when(events);
+
+    return events;
+  }
+
+  annotationQuery(options: any) {
+    return Promise.resolve(this.buildFakeAnnotationEvents(options.range, 10));
+  }
+
+  getQueryDisplayText(query: TestDataQuery) {
+    if (query.alias) {
+      return query.scenarioId + ' as ' + query.alias;
+    }
+    return query.scenarioId;
   }
 
   testDatasource() {
@@ -91,6 +124,76 @@ class TestDataDatasource {
       message: 'Data source is working',
     });
   }
+
+  getScenarios(): Promise<Scenario[]> {
+    if (!this.scenariosCache) {
+      this.scenariosCache = this.getResource('scenarios');
+    }
+
+    return this.scenariosCache;
+  }
+
+  variablesQuery(target: TestDataQuery, options: DataQueryRequest<TestDataQuery>): Observable<DataQueryResponse> {
+    const query = target.stringInput ?? '';
+    const interpolatedQuery = this.templateSrv.replace(
+      query,
+      getSearchFilterScopedVar({ query, wildcardChar: '*', options: options.scopedVars })
+    );
+    const children = queryMetricTree(interpolatedQuery);
+    const items = children.map((item) => ({ value: item.name, text: item.name }));
+    const dataFrame = new ArrayDataFrame(items);
+
+    return of({ data: [dataFrame] }).pipe(delay(100));
+  }
+
+  nodesQuery(target: TestDataQuery, options: DataQueryRequest<TestDataQuery>): Observable<DataQueryResponse> {
+    const type = target.nodes?.type || 'random';
+    let frames: DataFrame[];
+    switch (type) {
+      case 'random':
+        frames = generateRandomNodes(target.nodes?.count);
+        break;
+      case 'response':
+        frames = savedNodesResponse();
+        break;
+      default:
+        throw new Error(`Unknown node_graph sub type ${type}`);
+    }
+
+    return of({ data: frames }).pipe(delay(100));
+  }
 }
 
-export { TestDataDatasource };
+function runGrafanaAPI(target: TestDataQuery, req: DataQueryRequest<TestDataQuery>): Observable<DataQueryResponse> {
+  const url = `/api/${target.stringInput}`;
+  return from(
+    getBackendSrv()
+      .get(url)
+      .then((res) => {
+        const frame = new ArrayDataFrame(res);
+        return {
+          state: LoadingState.Done,
+          data: [frame],
+        };
+      })
+  );
+}
+
+let liveQueryCounter = 1000;
+
+function runGrafanaLiveQuery(
+  target: TestDataQuery,
+  req: DataQueryRequest<TestDataQuery>
+): Observable<DataQueryResponse> {
+  if (!target.channel) {
+    throw new Error(`Missing channel config`);
+  }
+  return getGrafanaLiveSrv().getDataStream({
+    addr: {
+      scope: LiveChannelScope.Plugin,
+      namespace: 'testdata',
+      path: target.channel,
+    },
+    key: `testStream.${liveQueryCounter++}`,
+  });
+}

@@ -6,9 +6,11 @@ const path = require('path');
 const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const HtmlWebpackHarddiskPlugin = require('html-webpack-harddisk-plugin');
-const CleanWebpackPlugin = require('clean-webpack-plugin');
+const { CleanWebpackPlugin } = require('clean-webpack-plugin');
+const getBabelConfig = require('./babel.config');
 
 module.exports = merge(common, {
+  mode: 'development',
   entry: {
     app: ['webpack-dev-server/client?http://localhost:3333', './public/app/dev.ts'],
   },
@@ -33,15 +35,20 @@ module.exports = merge(common, {
     proxy: {
       '!/public/build': 'http://localhost:3000',
     },
+    watchOptions: {
+      ignored: /node_modules/,
+    },
   },
 
   optimization: {
     removeAvailableModules: false,
+    runtimeChunk: false,
     removeEmptyChunks: false,
     splitChunks: false,
   },
 
   module: {
+    // Note: order is bottom-to-top and/or right-to-left
     rules: [
       {
         test: /\.tsx?$/,
@@ -49,27 +56,7 @@ module.exports = merge(common, {
         use: [
           {
             loader: 'babel-loader',
-            options: {
-              cacheDirectory: true,
-              babelrc: false,
-              plugins: [
-                [require('@rtsao/plugin-proposal-class-properties'), { loose: true }],
-                'angularjs-annotate',
-                'syntax-dynamic-import', // needed for `() => import()` in routes.ts
-                'react-hot-loader/babel',
-              ],
-              presets: [
-                [
-                  '@babel/preset-env',
-                  {
-                    targets: { browsers: 'last 3 versions' },
-                    useBuiltIns: 'entry',
-                  },
-                ],
-                '@babel/preset-typescript',
-                '@babel/preset-react',
-              ],
-            },
+            options: getBabelConfig(),
           },
         ],
       },
@@ -81,10 +68,14 @@ module.exports = merge(common, {
           {
             loader: 'postcss-loader',
             options: {
-              config: { path: __dirname + '/postcss.config.js' },
+              config: {
+                path: __dirname + '/postcss.config.js',
+              },
             },
           },
-          'sass-loader', // compiles Sass to CSS
+          {
+            loader: 'sass-loader',
+          },
         ],
       },
       {
@@ -95,12 +86,13 @@ module.exports = merge(common, {
   },
 
   plugins: [
-    new CleanWebpackPlugin('../public/build', { allowExternal: true }),
+    new CleanWebpackPlugin(),
     new HtmlWebpackPlugin({
       filename: path.resolve(__dirname, '../../public/views/index.html'),
       template: path.resolve(__dirname, '../../public/views/index-template.html'),
       inject: 'body',
       alwaysWriteToDisk: true,
+      chunksSortMode: 'none',
     }),
     new HtmlWebpackHarddiskPlugin(),
     new webpack.NamedModulesPlugin(),

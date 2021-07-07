@@ -1,25 +1,28 @@
+// Libraries
 import React, { PureComponent } from 'react';
-import { getAngularLoader, AngularComponent } from 'app/core/services/AngularLoader';
-import { Emitter } from 'app/core/utils/emitter';
-import { getIntervals } from 'app/core/utils/explore';
-import { DataQuery } from 'app/types';
-import { RawTimeRange } from '@grafana/ui';
-import { getTimeSrv } from 'app/features/dashboard/time_srv';
+
+// Services
+import { getAngularLoader, AngularComponent } from '@grafana/runtime';
+
+// Types
+import { DataQuery, TimeRange, EventBusExtended } from '@grafana/data';
 import 'app/features/plugins/plugin_loader';
 
 interface QueryEditorProps {
+  error?: any;
   datasource: any;
-  error?: string | JSX.Element;
   onExecuteQuery?: () => void;
-  onQueryChange?: (value: DataQuery, override?: boolean) => void;
+  onQueryChange?: (value: DataQuery) => void;
   initialQuery: DataQuery;
-  exploreEvents: Emitter;
-  range: RawTimeRange;
+  exploreEvents: EventBusExtended;
+  range: TimeRange;
+  textEditModeEnabled?: boolean;
 }
 
 export default class QueryEditor extends PureComponent<QueryEditorProps, any> {
   element: any;
   component: AngularComponent;
+  angularScope: any;
 
   async componentDidMount() {
     if (!this.element) {
@@ -27,33 +30,66 @@ export default class QueryEditor extends PureComponent<QueryEditorProps, any> {
     }
 
     const { datasource, initialQuery, exploreEvents, range } = this.props;
-    this.initTimeSrv(range);
 
     const loader = getAngularLoader();
     const template = '<plugin-component type="query-ctrl"> </plugin-component>';
     const target = { datasource: datasource.name, ...initialQuery };
     const scopeProps = {
-      target,
       ctrl: {
+        datasource,
+        target,
+        range,
         refresh: () => {
-          this.props.onQueryChange(target, false);
-          this.props.onExecuteQuery();
+          setTimeout(() => {
+            // the "hide" attribute of the quries can be changed from the "outside",
+            // it will be applied to "this.props.initialQuery.hide", but not to "target.hide".
+            // so we have to apply it.
+            if (target.hide !== this.props.initialQuery.hide) {
+              target.hide = this.props.initialQuery.hide;
+            }
+            this.props.onQueryChange?.(target);
+            this.props.onExecuteQuery?.();
+          }, 1);
+        },
+        onQueryChange: () => {
+          setTimeout(() => {
+            this.props.onQueryChange?.(target);
+          }, 1);
         },
         events: exploreEvents,
-        panel: {
-          datasource,
-          targets: [target],
-        },
-        dashboard: {
-          getNextQueryLetter: x => '',
-        },
-        hideEditorRowActions: true,
-        ...getIntervals(range, datasource, null), // Possible to get resolution?
+        panel: { datasource, targets: [target] },
+        dashboard: {},
       },
     };
 
     this.component = loader.load(this.element, scopeProps, template);
-    this.props.onQueryChange(target, false);
+    this.angularScope = scopeProps.ctrl;
+
+    setTimeout(() => {
+      this.props.onQueryChange?.(target);
+      this.props.onExecuteQuery?.();
+    }, 1);
+  }
+
+  componentDidUpdate(prevProps: QueryEditorProps) {
+    const hasToggledEditorMode = prevProps.textEditModeEnabled !== this.props.textEditModeEnabled;
+    const hasNewError = prevProps.error !== this.props.error;
+
+    if (this.component) {
+      if (hasToggledEditorMode && this.angularScope && this.angularScope.toggleEditorMode) {
+        this.angularScope.toggleEditorMode();
+      }
+
+      if (this.angularScope) {
+        this.angularScope.range = this.props.range;
+      }
+
+      if (hasNewError || hasToggledEditorMode) {
+        // Some query controllers listen to data error events and need a digest
+        // for some reason this needs to be done in next tick
+        setTimeout(this.component.digest);
+      }
+    }
   }
 
   componentWillUnmount() {
@@ -62,17 +98,7 @@ export default class QueryEditor extends PureComponent<QueryEditorProps, any> {
     }
   }
 
-  initTimeSrv(range) {
-    const timeSrv = getTimeSrv();
-    timeSrv.init({
-      time: range,
-      refresh: false,
-      getTimezone: () => 'utc',
-      timeRangeUpdated: () => console.log('refreshDashboard!'),
-    });
-  }
-
   render() {
-    return <div ref={element => (this.element = element)} style={{ width: '100%' }} />;
+    return <div className="gf-form-query" ref={(element) => (this.element = element)} style={{ width: '100%' }} />;
   }
 }

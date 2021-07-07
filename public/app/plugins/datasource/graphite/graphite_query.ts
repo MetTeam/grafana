@@ -1,23 +1,36 @@
-import _ from 'lodash';
+import { compact, each, findIndex, flatten, get, join, keyBy, last, map, reduce, without } from 'lodash';
+import { arrayMove } from 'app/core/utils/arrayMove';
 import { Parser } from './parser';
+import { TemplateSrv } from '@grafana/runtime';
+import { ScopedVars } from '@grafana/data';
+
+export type GraphiteTagOperator = '=' | '=~' | '!=' | '!=~';
+
+export type GraphiteTag = {
+  key: string;
+  operator: GraphiteTagOperator;
+  value: string;
+};
 
 export default class GraphiteQuery {
   datasource: any;
   target: any;
-  functions: any[];
-  segments: any[];
-  tags: any[];
+  functions: any[] = [];
+  segments: any[] = [];
+  tags: GraphiteTag[] = [];
   error: any;
-  seriesByTagUsed: boolean;
-  checkOtherSegmentsIndex: number;
+  seriesByTagUsed = false;
+  checkOtherSegmentsIndex = 0;
   removeTagValue: string;
   templateSrv: any;
   scopedVars: any;
 
   /** @ngInject */
-  constructor(datasource, target, templateSrv?, scopedVars?) {
+  constructor(datasource: any, target: any, templateSrv?: TemplateSrv, scopedVars?: ScopedVars) {
     this.datasource = datasource;
     this.target = target;
+    this.templateSrv = templateSrv;
+    this.scopedVars = scopedVars;
     this.parseTarget();
 
     this.removeTagValue = '-- remove tag --';
@@ -27,6 +40,7 @@ export default class GraphiteQuery {
     this.functions = [];
     this.segments = [];
     this.tags = [];
+    this.seriesByTagUsed = false;
     this.error = null;
 
     if (this.target.textEditor) {
@@ -49,29 +63,18 @@ export default class GraphiteQuery {
     try {
       this.parseTargetRecursive(astNode, null);
     } catch (err) {
-      console.log('error parsing target:', err.message);
+      console.error('error parsing target:', err.message);
       this.error = err.message;
       this.target.textEditor = true;
     }
 
     this.checkOtherSegmentsIndex = this.segments.length - 1;
-    this.checkForSeriesByTag();
   }
 
-  checkForSeriesByTag() {
-    const seriesByTagFunc = _.find(this.functions, func => func.def.name === 'seriesByTag');
-    if (seriesByTagFunc) {
-      this.seriesByTagUsed = true;
-      seriesByTagFunc.hidden = true;
-      const tags = this.splitSeriesByTagParams(seriesByTagFunc);
-      this.tags = tags;
-    }
-  }
-
-  getSegmentPathUpTo(index) {
+  getSegmentPathUpTo(index: number) {
     const arr = this.segments.slice(0, index);
 
-    return _.reduce(
+    return reduce(
       arr,
       (result, segment) => {
         return result ? result + '.' + segment.value : segment.value;
@@ -80,7 +83,7 @@ export default class GraphiteQuery {
     );
   }
 
-  parseTargetRecursive(astNode, func) {
+  parseTargetRecursive(astNode: any, func: any): any {
     if (astNode === null) {
       return null;
     }
@@ -90,15 +93,23 @@ export default class GraphiteQuery {
         const innerFunc = this.datasource.createFuncInstance(astNode.name, {
           withDefaultParams: false,
         });
-        _.each(astNode.params, param => {
+        each(astNode.params, (param) => {
           this.parseTargetRecursive(param, innerFunc);
         });
 
         innerFunc.updateText();
         this.functions.push(innerFunc);
+
+        // extract tags from seriesByTag function and hide function
+        if (innerFunc.def.name === 'seriesByTag' && !this.seriesByTagUsed) {
+          this.seriesByTagUsed = true;
+          innerFunc.hidden = true;
+          this.tags = this.splitSeriesByTagParams(innerFunc);
+        }
+
         break;
       case 'series-ref':
-        if (this.segments.length > 0) {
+        if (this.segments.length > 0 || this.getSeriesByTagFuncIndex() >= 0) {
           this.addFunctionParameter(func, astNode.value);
         } else {
           this.segments.push(astNode);
@@ -110,8 +121,8 @@ export default class GraphiteQuery {
         this.addFunctionParameter(func, astNode.value);
         break;
       case 'metric':
-        if (this.segments.length > 0) {
-          this.addFunctionParameter(func, _.join(_.map(astNode.segments, 'value'), '.'));
+        if (this.segments.length || this.tags.length) {
+          this.addFunctionParameter(func, join(map(astNode.segments, 'value'), '.'));
         } else {
           this.segments = astNode.segments;
         }
@@ -119,7 +130,7 @@ export default class GraphiteQuery {
     }
   }
 
-  updateSegmentValue(segment, index) {
+  updateSegmentValue(segment: any, index: number) {
     this.segments[index].value = segment.value;
   }
 
@@ -127,38 +138,36 @@ export default class GraphiteQuery {
     this.segments.push({ value: 'select metric' });
   }
 
-  addFunction(newFunc) {
+  addFunction(newFunc: any) {
     this.functions.push(newFunc);
-    this.moveAliasFuncLast();
   }
 
-  moveAliasFuncLast() {
-    const aliasFunc = _.find(this.functions, func => {
-      return func.def.name.startsWith('alias');
-    });
-
-    if (aliasFunc) {
-      this.functions = _.without(this.functions, aliasFunc);
-      this.functions.push(aliasFunc);
-    }
-  }
-
-  addFunctionParameter(func, value) {
-    if (func.params.length >= func.def.params.length && !_.get(_.last(func.def.params), 'multiple', false)) {
+  addFunctionParameter(func: any, value: string) {
+    if (func.params.length >= func.def.params.length && !get(last(func.def.params), 'multiple', false)) {
       throw { message: 'too many parameters for function ' + func.def.name };
     }
     func.params.push(value);
   }
 
-  removeFunction(func) {
-    this.functions = _.without(this.functions, func);
+  removeFunction(func: any) {
+    this.functions = without(this.functions, func);
   }
 
-  updateModelTarget(targets) {
-    // render query
+  moveFunction(func: any, offset: number) {
+    const index = this.functions.indexOf(func);
+    arrayMove(this.functions, index, index + offset);
+  }
+
+  updateModelTarget(targets: any) {
+    const wrapFunction = (target: string, func: any) => {
+      return func.render(target, (value: string) => {
+        return this.templateSrv.replace(value, this.scopedVars);
+      });
+    };
+
     if (!this.target.textEditor) {
       const metricPath = this.getSegmentPathUpTo(this.segments.length).replace(/\.select metric$/, '');
-      this.target.target = _.reduce(this.functions, wrapFunction, metricPath);
+      this.target.target = reduce(this.functions, wrapFunction, metricPath);
     }
 
     this.updateRenderedTarget(this.target, targets);
@@ -171,9 +180,9 @@ export default class GraphiteQuery {
     }
   }
 
-  updateRenderedTarget(target, targets) {
+  updateRenderedTarget(target: { refId: string | number; target: any; targetFull: any }, targets: any) {
     // render nested query
-    const targetsByRefId = _.keyBy(targets, 'refId');
+    const targetsByRefId = keyBy(targets, 'refId');
 
     // no references to self
     delete targetsByRefId[target.refId];
@@ -182,9 +191,9 @@ export default class GraphiteQuery {
     let targetWithNestedQueries = target.target;
 
     // Use ref count to track circular references
-    function countTargetRefs(targetsByRefId, refId) {
+    function countTargetRefs(targetsByRefId: any, refId: string) {
       let refCount = 0;
-      _.each(targetsByRefId, (t, id) => {
+      each(targetsByRefId, (t, id) => {
         if (id !== refId) {
           const match = nestedSeriesRefRegex.exec(t.target);
           const count = match && match.length ? match.length - 1 : 0;
@@ -193,14 +202,14 @@ export default class GraphiteQuery {
       });
       targetsByRefId[refId].refCount = refCount;
     }
-    _.each(targetsByRefId, (t, id) => {
+    each(targetsByRefId, (t, id) => {
       countTargetRefs(targetsByRefId, id);
     });
 
     // Keep interpolating until there are no query references
     // The reason for the loop is that the referenced query might contain another reference to another query
     while (targetWithNestedQueries.match(nestedSeriesRefRegex)) {
-      const updated = targetWithNestedQueries.replace(nestedSeriesRefRegex, (match, g1) => {
+      const updated = targetWithNestedQueries.replace(nestedSeriesRefRegex, (match: string, g1: string) => {
         const t = targetsByRefId[g1];
         if (!t) {
           return match;
@@ -228,17 +237,17 @@ export default class GraphiteQuery {
     }
   }
 
-  splitSeriesByTagParams(func) {
+  splitSeriesByTagParams(func: { params: any }) {
     const tagPattern = /([^\!=~]+)(\!?=~?)(.*)/;
-    return _.flatten(
-      _.map(func.params, (param: string) => {
+    return flatten(
+      map(func.params, (param: string) => {
         const matches = tagPattern.exec(param);
         if (matches) {
           const tag = matches.slice(1);
           if (tag.length === 3) {
             return {
               key: tag[0],
-              operator: tag[1],
+              operator: tag[1] as GraphiteTagOperator,
               value: tag[2],
             };
           }
@@ -249,7 +258,7 @@ export default class GraphiteQuery {
   }
 
   getSeriesByTagFuncIndex() {
-    return _.findIndex(this.functions, func => func.def.name === 'seriesByTag');
+    return findIndex(this.functions, (func) => func.def.name === 'seriesByTag');
   }
 
   getSeriesByTagFunc() {
@@ -261,18 +270,18 @@ export default class GraphiteQuery {
     }
   }
 
-  addTag(tag) {
+  addTag(tag: { key: any; operator: GraphiteTagOperator; value: string }) {
     const newTagParam = renderTagString(tag);
     this.getSeriesByTagFunc().params.push(newTagParam);
     this.tags.push(tag);
   }
 
-  removeTag(index) {
+  removeTag(index: number) {
     this.getSeriesByTagFunc().params.splice(index, 1);
     this.tags.splice(index, 1);
   }
 
-  updateTag(tag, tagIndex) {
+  updateTag(tag: { key: string; operator: GraphiteTagOperator; value: string }, tagIndex: number) {
     this.error = null;
 
     if (tag.key === this.removeTagValue) {
@@ -286,21 +295,19 @@ export default class GraphiteQuery {
   }
 
   renderTagExpressions(excludeIndex = -1) {
-    return _.compact(
-      _.map(this.tags, (tagExpr, index) => {
+    return compact(
+      map(this.tags, (tagExpr, index) => {
         // Don't render tag that we want to lookup
         if (index !== excludeIndex) {
           return tagExpr.key + tagExpr.operator + tagExpr.value;
+        } else {
+          return undefined;
         }
       })
     );
   }
 }
 
-function wrapFunction(target, func) {
-  return func.render(target);
-}
-
-function renderTagString(tag) {
+function renderTagString(tag: { key: any; operator?: any; value?: any }) {
   return tag.key + tag.operator + tag.value;
 }

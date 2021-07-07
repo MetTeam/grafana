@@ -1,23 +1,47 @@
-import React, { SFC } from 'react';
+import React, { FC } from 'react';
+import { selectors } from '@grafana/e2e-selectors';
+
+import config from 'app/core/config';
+import { Button, LinkButton } from '@grafana/ui';
 
 export interface Props {
   isReadOnly: boolean;
   onDelete: () => void;
-  onSubmit: (event) => void;
+  onSubmit: (event: any) => void;
+  onTest: (event: any) => void;
 }
 
-const ButtonRow: SFC<Props> = ({ isReadOnly, onDelete, onSubmit }) => {
+const ButtonRow: FC<Props> = ({ isReadOnly, onDelete, onSubmit, onTest }) => {
   return (
     <div className="gf-form-button-row">
-      <button type="submit" className="btn btn-success" disabled={isReadOnly} onClick={event => onSubmit(event)}>
-        Save &amp; Test
-      </button>
-      <button type="submit" className="btn btn-danger" disabled={isReadOnly} onClick={onDelete}>
-        Delete
-      </button>
-      <a className="btn btn-inverse" href="/datasources">
+      <LinkButton variant="secondary" fill="outline" href={`${config.appSubUrl}/datasources`}>
         Back
-      </a>
+      </LinkButton>
+      <Button
+        type="button"
+        variant="destructive"
+        disabled={isReadOnly}
+        onClick={onDelete}
+        aria-label={selectors.pages.DataSource.delete}
+      >
+        Delete
+      </Button>
+      {!isReadOnly && (
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={isReadOnly}
+          onClick={(event) => onSubmit(event)}
+          aria-label={selectors.pages.DataSource.saveAndTest}
+        >
+          Save &amp; test
+        </Button>
+      )}
+      {isReadOnly && (
+        <Button type="submit" variant="primary" onClick={onTest}>
+          Test
+        </Button>
+      )}
     </div>
   );
 };

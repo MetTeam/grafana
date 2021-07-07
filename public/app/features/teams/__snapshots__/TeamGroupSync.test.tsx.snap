@@ -10,33 +10,28 @@ exports[`Render should render component 1`] = `
     >
       External group sync
     </h3>
-    <class_1
-      className="page-sub-heading-icon"
+    <Tooltip
       content="Sync LDAP or OAuth groups with your Grafana teams."
       placement="auto"
     >
-      <i
-        className="gicon gicon-question gicon--has-hover"
+      <Icon
+        className="icon--has-hover page-sub-heading-icon"
+        name="question-circle"
       />
-    </class_1>
+    </Tooltip>
     <div
       className="page-action-bar__spacer"
     />
   </div>
-  <Component
+  <SlideDown
     in={false}
   >
     <div
       className="cta-form"
     >
-      <button
-        className="cta-form__close btn btn-transparent"
+      <CloseButton
         onClick={[Function]}
-      >
-        <i
-          className="fa fa-close"
-        />
-      </button>
+      />
       <h5>
         Add External Group
       </h5>
@@ -47,7 +42,7 @@ exports[`Render should render component 1`] = `
         <div
           className="gf-form"
         >
-          <input
+          <Input
             className="gf-form-input width-30"
             onChange={[Function]}
             placeholder="cn=ops,ou=groups,dc=grafana,dc=org"
@@ -58,51 +53,26 @@ exports[`Render should render component 1`] = `
         <div
           className="gf-form"
         >
-          <button
-            className="btn btn-success gf-form-btn"
+          <Button
             disabled={true}
             type="submit"
           >
             Add group
-          </button>
+          </Button>
         </div>
       </form>
     </div>
-  </Component>
-  <div
-    className="empty-list-cta"
-  >
-    <div
-      className="empty-list-cta__title"
-    >
-      There are no external groups to sync with
-    </div>
-    <button
-      className="empty-list-cta__button btn btn-xlarge btn-success"
-      onClick={[Function]}
-    >
-      <i
-        className="gicon gicon-add-team"
-      />
-      Add Group
-    </button>
-    <div
-      className="empty-list-cta__pro-tip"
-    >
-      <i
-        className="fa fa-rocket"
-      />
-       
-      Sync LDAP or OAuth groups with your Grafana teams.
-      <a
-        className="text-link empty-list-cta__pro-tip-link"
-        href="http://docs.grafana.org/auth/enhanced_ldap/"
-        target="_blank"
-      >
-        Learn more
-      </a>
-    </div>
-  </div>
+  </SlideDown>
+  <EmptyListCTA
+    buttonIcon="users-alt"
+    buttonTitle="Add Group"
+    onClick={[Function]}
+    proTip="Sync LDAP or OAuth groups with your Grafana teams."
+    proTipLink="http://docs.grafana.org/auth/enhanced_ldap/"
+    proTipLinkTitle="Learn more"
+    proTipTarget="_blank"
+    title="There are no external groups to sync with"
+  />
 </div>
 `;
 
@@ -116,42 +86,37 @@ exports[`Render should render groups table 1`] = `
     >
       External group sync
     </h3>
-    <class_1
-      className="page-sub-heading-icon"
+    <Tooltip
       content="Sync LDAP or OAuth groups with your Grafana teams."
       placement="auto"
     >
-      <i
-        className="gicon gicon-question gicon--has-hover"
+      <Icon
+        className="icon--has-hover page-sub-heading-icon"
+        name="question-circle"
       />
-    </class_1>
+    </Tooltip>
     <div
       className="page-action-bar__spacer"
     />
-    <button
-      className="btn btn-success pull-right"
+    <Button
+      className="pull-right"
       onClick={[Function]}
     >
-      <i
-        className="fa fa-plus"
+      <Icon
+        name="plus"
       />
        Add group
-    </button>
+    </Button>
   </div>
-  <Component
+  <SlideDown
     in={false}
   >
     <div
       className="cta-form"
     >
-      <button
-        className="cta-form__close btn btn-transparent"
+      <CloseButton
         onClick={[Function]}
-      >
-        <i
-          className="fa fa-close"
-        />
-      </button>
+      />
       <h5>
         Add External Group
       </h5>
@@ -162,7 +127,7 @@ exports[`Render should render groups table 1`] = `
         <div
           className="gf-form"
         >
-          <input
+          <Input
             className="gf-form-input width-30"
             onChange={[Function]}
             placeholder="cn=ops,ou=groups,dc=grafana,dc=org"
@@ -173,17 +138,16 @@ exports[`Render should render groups table 1`] = `
         <div
           className="gf-form"
         >
-          <button
-            className="btn btn-success gf-form-btn"
+          <Button
             disabled={true}
             type="submit"
           >
             Add group
-          </button>
+          </Button>
         </div>
       </form>
     </div>
-  </Component>
+  </SlideDown>
   <div
     className="admin-list-table"
   >
@@ -218,14 +182,15 @@ exports[`Render should render groups table 1`] = `
               }
             }
           >
-            <a
-              className="btn btn-danger btn-mini"
+            <Button
               onClick={[Function]}
+              size="sm"
+              variant="destructive"
             >
-              <i
-                className="fa fa-remove"
+              <Icon
+                name="times"
               />
-            </a>
+            </Button>
           </td>
         </tr>
         <tr
@@ -241,14 +206,15 @@ exports[`Render should render groups table 1`] = `
               }
             }
           >
-            <a
-              className="btn btn-danger btn-mini"
+            <Button
               onClick={[Function]}
+              size="sm"
+              variant="destructive"
             >
-              <i
-                className="fa fa-remove"
+              <Icon
+                name="times"
               />
-            </a>
+            </Button>
           </td>
         </tr>
         <tr
@@ -264,14 +230,15 @@ exports[`Render should render groups table 1`] = `
               }
             }
           >
-            <a
-              className="btn btn-danger btn-mini"
+            <Button
               onClick={[Function]}
+              size="sm"
+              variant="destructive"
             >
-              <i
-                className="fa fa-remove"
+              <Icon
+                name="times"
               />
-            </a>
+            </Button>
           </td>
         </tr>
       </tbody>

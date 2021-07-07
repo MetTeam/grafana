@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"go/build"
 	"io"
 	"io/ioutil"
 	"log"
@@ -29,44 +30,53 @@ const (
 
 var (
 	//versionRe = regexp.MustCompile(`-[0-9]{1,3}-g[0-9a-f]{5,10}`)
-	goarch  string
-	goos    string
-	gocc    string
-	cgo     bool
-	pkgArch string
-	version string = "v1"
+	goarch    string
+	goos      string
+	gocc      string
+	cgo       bool
+	libc      string
+	pkgArch   string
+	version   string = "v1"
+	buildTags []string
 	// deb & rpm does not support semver so have to handle their version a little differently
 	linuxPackageVersion   string = "v1"
 	linuxPackageIteration string = ""
 	race                  bool
-	phjsToRelease         string
 	workingDir            string
 	includeBuildId        bool     = true
 	buildId               string   = "0"
-	binaries              []string = []string{"grafana-server", "grafana-cli"}
+	serverBinary          string   = "grafana-server"
+	cliBinary             string   = "grafana-cli"
+	binaries              []string = []string{serverBinary, cliBinary}
 	isDev                 bool     = false
 	enterprise            bool     = false
+	skipRpmGen            bool     = false
+	skipDebGen            bool     = false
+	printGenVersion       bool     = false
 )
 
 func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(0)
 
-	ensureGoPath()
-
 	var buildIdRaw string
+	var buildTagsRaw string
 
 	flag.StringVar(&goarch, "goarch", runtime.GOARCH, "GOARCH")
 	flag.StringVar(&goos, "goos", runtime.GOOS, "GOOS")
 	flag.StringVar(&gocc, "cc", "", "CC")
+	flag.StringVar(&libc, "libc", "", "LIBC")
+	flag.StringVar(&buildTagsRaw, "build-tags", "", "Sets custom build tags")
 	flag.BoolVar(&cgo, "cgo-enabled", cgo, "Enable cgo")
 	flag.StringVar(&pkgArch, "pkg-arch", "", "PKG ARCH")
-	flag.StringVar(&phjsToRelease, "phjs", "", "PhantomJS binary")
 	flag.BoolVar(&race, "race", race, "Use race detector")
 	flag.BoolVar(&includeBuildId, "includeBuildId", includeBuildId, "IncludeBuildId in package name")
 	flag.BoolVar(&enterprise, "enterprise", enterprise, "Build enterprise version of Grafana")
 	flag.StringVar(&buildIdRaw, "buildId", "0", "Build ID from CI system")
 	flag.BoolVar(&isDev, "dev", isDev, "optimal for development, skips certain steps")
+	flag.BoolVar(&skipRpmGen, "skipRpm", skipRpmGen, "skip rpm package generation (default: false)")
+	flag.BoolVar(&skipDebGen, "skipDeb", skipDebGen, "skip deb package generation (default: false)")
+	flag.BoolVar(&printGenVersion, "gen-version", printGenVersion, "generate Grafana version and output (default: false)")
 	flag.Parse()
 
 	buildId = shortenBuildId(buildIdRaw)
@@ -75,6 +85,15 @@ func main() {
 
 	if pkgArch == "" {
 		pkgArch = goarch
+	}
+
+	if printGenVersion {
+		printGeneratedVersion()
+		return
+	}
+
+	if len(buildTagsRaw) > 0 {
+		buildTags = strings.Split(buildTagsRaw, ",")
 	}
 
 	log.Printf("Version: %s, Linux Version: %s, Package Iteration: %s\n", version, linuxPackageVersion, linuxPackageIteration)
@@ -91,53 +110,22 @@ func main() {
 		case "setup":
 			setup()
 
-		case "build-srv":
+		case "build-srv", "build-server":
 			clean()
-			build("grafana-server", "./pkg/cmd/grafana-server", []string{})
+			doBuild("grafana-server", "./pkg/cmd/grafana-server", buildTags)
 
 		case "build-cli":
 			clean()
-			build("grafana-cli", "./pkg/cmd/grafana-cli", []string{})
-
-		case "build-server":
-			clean()
-			build("grafana-server", "./pkg/cmd/grafana-server", []string{})
+			doBuild("grafana-cli", "./pkg/cmd/grafana-cli", buildTags)
 
 		case "build":
 			//clean()
 			for _, binary := range binaries {
-				build(binary, "./pkg/cmd/"+binary, []string{})
+				doBuild(binary, "./pkg/cmd/"+binary, buildTags)
 			}
 
 		case "build-frontend":
-			grunt(gruntBuildArg("build")...)
-
-		case "test":
-			test("./pkg/...")
-			grunt("test")
-
-		case "package":
-			grunt(gruntBuildArg("build")...)
-			grunt(gruntBuildArg("package")...)
-			if goos == linux {
-				createLinuxPackages()
-			}
-
-		case "package-only":
-			grunt(gruntBuildArg("package")...)
-			if goos == linux {
-				createLinuxPackages()
-			}
-		case "pkg-archive":
-			grunt(gruntBuildArg("package")...)
-
-		case "pkg-rpm":
-			grunt(gruntBuildArg("release")...)
-			createRpmPackages()
-
-		case "pkg-deb":
-			grunt(gruntBuildArg("release")...)
-			createDebPackages()
+			yarn("build")
 
 		case "sha-dist":
 			shaFilesInDist()
@@ -161,9 +149,15 @@ func makeLatestDistCopies() {
 	}
 
 	latestMapping := map[string]string{
-		"_amd64.deb":          "dist/grafana_latest_amd64.deb",
-		".x86_64.rpm":         "dist/grafana-latest-1.x86_64.rpm",
-		".linux-amd64.tar.gz": "dist/grafana-latest.linux-x64.tar.gz",
+		"_amd64.deb":               "dist/grafana_latest_amd64.deb",
+		".x86_64.rpm":              "dist/grafana-latest-1.x86_64.rpm",
+		".linux-amd64.tar.gz":      "dist/grafana-latest.linux-x64.tar.gz",
+		".linux-amd64-musl.tar.gz": "dist/grafana-latest.linux-x64-musl.tar.gz",
+		".linux-armv7.tar.gz":      "dist/grafana-latest.linux-armv7.tar.gz",
+		".linux-armv7-musl.tar.gz": "dist/grafana-latest.linux-armv7-musl.tar.gz",
+		".linux-armv6.tar.gz":      "dist/grafana-latest.linux-armv6.tar.gz",
+		".linux-arm64.tar.gz":      "dist/grafana-latest.linux-arm64.tar.gz",
+		".linux-arm64-musl.tar.gz": "dist/grafana-latest.linux-arm64-musl.tar.gz",
 	}
 
 	for _, file := range files {
@@ -212,226 +206,49 @@ func readVersionFromPackageJson() {
 	}
 }
 
-type linuxPackageOptions struct {
-	packageType            string
-	homeDir                string
-	binPath                string
-	serverBinPath          string
-	cliBinPath             string
-	configDir              string
-	ldapFilePath           string
-	etcDefaultPath         string
-	etcDefaultFilePath     string
-	initdScriptFilePath    string
-	systemdServiceFilePath string
-
-	postinstSrc    string
-	initdScriptSrc string
-	defaultFileSrc string
-	systemdFileSrc string
-
-	depends []string
+func yarn(params ...string) {
+	runPrint(`yarn run`, params...)
 }
 
-func createDebPackages() {
-	previousPkgArch := pkgArch
-	if pkgArch == "armv7" {
-		pkgArch = "armhf"
-	}
-	createPackage(linuxPackageOptions{
-		packageType:            "deb",
-		homeDir:                "/usr/share/grafana",
-		binPath:                "/usr/sbin",
-		configDir:              "/etc/grafana",
-		etcDefaultPath:         "/etc/default",
-		etcDefaultFilePath:     "/etc/default/grafana-server",
-		initdScriptFilePath:    "/etc/init.d/grafana-server",
-		systemdServiceFilePath: "/usr/lib/systemd/system/grafana-server.service",
-
-		postinstSrc:    "packaging/deb/control/postinst",
-		initdScriptSrc: "packaging/deb/init.d/grafana-server",
-		defaultFileSrc: "packaging/deb/default/grafana-server",
-		systemdFileSrc: "packaging/deb/systemd/grafana-server.service",
-
-		depends: []string{"adduser", "libfontconfig"},
-	})
-	pkgArch = previousPkgArch
-}
-
-func createRpmPackages() {
-	previousPkgArch := pkgArch
-	switch {
-	case pkgArch == "armv7":
-		pkgArch = "armhfp"
-	case pkgArch == "arm64":
-		pkgArch = "aarch64"
-	}
-	createPackage(linuxPackageOptions{
-		packageType:            "rpm",
-		homeDir:                "/usr/share/grafana",
-		binPath:                "/usr/sbin",
-		configDir:              "/etc/grafana",
-		etcDefaultPath:         "/etc/sysconfig",
-		etcDefaultFilePath:     "/etc/sysconfig/grafana-server",
-		initdScriptFilePath:    "/etc/init.d/grafana-server",
-		systemdServiceFilePath: "/usr/lib/systemd/system/grafana-server.service",
-
-		postinstSrc:    "packaging/rpm/control/postinst",
-		initdScriptSrc: "packaging/rpm/init.d/grafana-server",
-		defaultFileSrc: "packaging/rpm/sysconfig/grafana-server",
-		systemdFileSrc: "packaging/rpm/systemd/grafana-server.service",
-
-		depends: []string{"/sbin/service", "fontconfig", "freetype", "urw-fonts"},
-	})
-	pkgArch = previousPkgArch
-}
-
-func createLinuxPackages() {
-	createDebPackages()
-	createRpmPackages()
-}
-
-func createPackage(options linuxPackageOptions) {
-	packageRoot, _ := ioutil.TempDir("", "grafana-linux-pack")
-
-	// create directories
-	runPrint("mkdir", "-p", filepath.Join(packageRoot, options.homeDir))
-	runPrint("mkdir", "-p", filepath.Join(packageRoot, options.configDir))
-	runPrint("mkdir", "-p", filepath.Join(packageRoot, "/etc/init.d"))
-	runPrint("mkdir", "-p", filepath.Join(packageRoot, options.etcDefaultPath))
-	runPrint("mkdir", "-p", filepath.Join(packageRoot, "/usr/lib/systemd/system"))
-	runPrint("mkdir", "-p", filepath.Join(packageRoot, "/usr/sbin"))
-
-	// copy binary
-	for _, binary := range binaries {
-		runPrint("cp", "-p", filepath.Join(workingDir, "tmp/bin/"+binary), filepath.Join(packageRoot, "/usr/sbin/"+binary))
-	}
-	// copy init.d script
-	runPrint("cp", "-p", options.initdScriptSrc, filepath.Join(packageRoot, options.initdScriptFilePath))
-	// copy environment var file
-	runPrint("cp", "-p", options.defaultFileSrc, filepath.Join(packageRoot, options.etcDefaultFilePath))
-	// copy systemd file
-	runPrint("cp", "-p", options.systemdFileSrc, filepath.Join(packageRoot, options.systemdServiceFilePath))
-	// copy release files
-	runPrint("cp", "-a", filepath.Join(workingDir, "tmp")+"/.", filepath.Join(packageRoot, options.homeDir))
-	// remove bin path
-	runPrint("rm", "-rf", filepath.Join(packageRoot, options.homeDir, "bin"))
-
-	args := []string{
-		"-s", "dir",
-		"--description", "Grafana",
-		"-C", packageRoot,
-		"--url", "https://grafana.com",
-		"--maintainer", "contact@grafana.com",
-		"--config-files", options.initdScriptFilePath,
-		"--config-files", options.etcDefaultFilePath,
-		"--config-files", options.systemdServiceFilePath,
-		"--after-install", options.postinstSrc,
-
-		"--version", linuxPackageVersion,
-		"-p", "./dist",
-	}
-
-	name := "grafana"
-	if enterprise {
-		name += "-enterprise"
-		args = append(args, "--replaces", "grafana")
-	}
-	args = append(args, "--name", name)
-
-	description := "Grafana"
-	if enterprise {
-		description += " Enterprise"
-	}
-	args = append(args, "--vendor", description)
-
-	if !enterprise {
-		args = append(args, "--license", "\"Apache 2.0\"")
-	}
-
-	if options.packageType == "rpm" {
-		args = append(args, "--rpm-posttrans", "packaging/rpm/control/posttrans")
-	}
-
-	if options.packageType == "deb" {
-		args = append(args, "--deb-no-default-config-files")
-	}
-
-	if pkgArch != "" {
-		args = append(args, "-a", pkgArch)
-	}
-
-	if linuxPackageIteration != "" {
-		args = append(args, "--iteration", linuxPackageIteration)
-	}
-
-	// add dependenciesj
-	for _, dep := range options.depends {
-		args = append(args, "--depends", dep)
-	}
-
-	args = append(args, ".")
-
-	fmt.Println("Creating package: ", options.packageType)
-	runPrint("fpm", append([]string{"-t", options.packageType}, args...)...)
-}
-
-func ensureGoPath() {
-	if os.Getenv("GOPATH") == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			log.Fatal(err)
-		}
-		gopath := filepath.Clean(filepath.Join(cwd, "../../../../"))
-		log.Println("GOPATH is", gopath)
-		os.Setenv("GOPATH", gopath)
-	}
-}
-
-func grunt(params ...string) {
-	if runtime.GOOS == windows {
-		runPrint(`.\node_modules\.bin\grunt`, params...)
-	} else {
-		runPrint("./node_modules/.bin/grunt", params...)
-	}
-}
-
-func gruntBuildArg(task string) []string {
-	args := []string{task}
+func genPackageVersion() string {
 	if includeBuildId {
-		args = append(args, fmt.Sprintf("--pkgVer=%v-%v", linuxPackageVersion, linuxPackageIteration))
+		return fmt.Sprintf("%v-%v", linuxPackageVersion, linuxPackageIteration)
 	} else {
-		args = append(args, fmt.Sprintf("--pkgVer=%v", version))
+		return version
 	}
-	if pkgArch != "" {
-		args = append(args, fmt.Sprintf("--arch=%v", pkgArch))
-	}
-	if phjsToRelease != "" {
-		args = append(args, fmt.Sprintf("--phjsToRelease=%v", phjsToRelease))
-	}
-	if enterprise {
-		args = append(args, "--enterprise")
-	}
-
-	args = append(args, fmt.Sprintf("--platform=%v", goos))
-
-	return args
 }
 
 func setup() {
-	runPrint("go", "get", "-v", "github.com/golang/dep")
-	runPrint("go", "install", "-v", "./pkg/cmd/grafana-server")
+	args := []string{"install", "-v"}
+	if goos == windows {
+		args = append(args, "-buildmode=exe")
+	}
+	args = append(args, "./pkg/cmd/grafana-server")
+	runPrint("go", args...)
+}
+
+func printGeneratedVersion() {
+	fmt.Print(genPackageVersion())
 }
 
 func test(pkg string) {
 	setBuildEnv()
-	runPrint("go", "test", "-short", "-timeout", "60s", pkg)
+	args := []string{"test", "-short", "-timeout", "60s"}
+	if goos == windows {
+		args = append(args, "-buildmode=exe")
+	}
+	args = append(args, pkg)
+	runPrint("go", args...)
 }
 
-func build(binaryName, pkg string, tags []string) {
-	binary := fmt.Sprintf("./bin/%s-%s/%s", goos, goarch, binaryName)
+func doBuild(binaryName, pkg string, tags []string) {
+	libcPart := ""
+	if libc != "" {
+		libcPart = fmt.Sprintf("-%s", libc)
+	}
+	binary := fmt.Sprintf("./bin/%s-%s%s/%s", goos, goarch, libcPart, binaryName)
 	if isDev {
-		//don't include os and arch in output path in dev environment
+		//don't include os/arch/libc in output path in dev environment
 		binary = fmt.Sprintf("./bin/%s", binaryName)
 	}
 
@@ -443,6 +260,10 @@ func build(binaryName, pkg string, tags []string) {
 		rmr(binary, binary+".md5")
 	}
 	args := []string{"build", "-ldflags", ldflags()}
+	if goos == windows {
+		// Work around a linking error on Windows: "export ordinal too large"
+		args = append(args, "-buildmode=exe")
+	}
 	if len(tags) > 0 {
 		args = append(args, "-tags", strings.Join(tags, ","))
 	}
@@ -456,7 +277,11 @@ func build(binaryName, pkg string, tags []string) {
 	if !isDev {
 		setBuildEnv()
 		runPrint("go", "version")
-		fmt.Printf("Targeting %s/%s\n", goos, goarch)
+		libcPart := ""
+		if libc != "" {
+			libcPart = fmt.Sprintf("/%s", libc)
+		}
+		fmt.Printf("Targeting %s/%s%s\n", goos, goarch, libcPart)
 	}
 
 	runPrint("go", args...)
@@ -478,6 +303,9 @@ func ldflags() string {
 	b.WriteString(fmt.Sprintf(" -X main.commit=%s", getGitSha()))
 	b.WriteString(fmt.Sprintf(" -X main.buildstamp=%d", buildStamp()))
 	b.WriteString(fmt.Sprintf(" -X main.buildBranch=%s", getGitBranch()))
+	if v := os.Getenv("LDFLAGS"); v != "" {
+		b.WriteString(fmt.Sprintf(" -extldflags \"%s\"", v))
+	}
 	return b.String()
 }
 
@@ -495,7 +323,7 @@ func clean() {
 
 	rmr("dist")
 	rmr("tmp")
-	rmr(filepath.Join(os.Getenv("GOPATH"), fmt.Sprintf("pkg/%s_%s/github.com/grafana", goos, goarch)))
+	rmr(filepath.Join(build.Default.GOPATH, fmt.Sprintf("pkg/%s_%s/github.com/grafana", goos, goarch)))
 }
 
 func setBuildEnv() {
@@ -542,6 +370,11 @@ func getGitSha() string {
 }
 
 func buildStamp() int64 {
+	// use SOURCE_DATE_EPOCH if set.
+	if s, _ := strconv.ParseInt(os.Getenv("SOURCE_DATE_EPOCH"), 10, 64); s > 0 {
+		return s
+	}
+
 	bs, err := runError("git", "show", "-s", "--format=%ct")
 	if err != nil {
 		return time.Now().Unix()
@@ -563,6 +396,7 @@ func runError(cmd string, args ...string) ([]byte, error) {
 func runPrint(cmd string, args ...string) {
 	log.Println(cmd, strings.Join(args, " "))
 	ecmd := exec.Command(cmd, args...)
+	ecmd.Env = append(os.Environ(), "GO111MODULE=on")
 	ecmd.Stdout = os.Stdout
 	ecmd.Stderr = os.Stderr
 	err := ecmd.Run()

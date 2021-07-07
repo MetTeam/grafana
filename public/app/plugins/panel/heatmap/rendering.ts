@@ -1,42 +1,52 @@
-import _ from 'lodash';
+import { find, isEmpty, isNil, isString, map, max, min, toNumber, isNaN } from 'lodash';
 import $ from 'jquery';
-import moment from 'moment';
 import * as d3 from 'd3';
-import kbn from 'app/core/utils/kbn';
-import { appEvents, contextSrv } from 'app/core/core';
+import { contextSrv } from 'app/core/core';
 import * as ticksUtils from 'app/core/utils/ticks';
 import { HeatmapTooltip } from './heatmap_tooltip';
 import { mergeZeroBuckets } from './heatmap_data_converter';
 import { getColorScale, getOpacityScale } from './color_scale';
+import {
+  toUtc,
+  PanelEvents,
+  getValueFormat,
+  formattedValueToString,
+  dateTimeFormat,
+  LegacyGraphHoverEvent,
+  LegacyGraphHoverClearEvent,
+  getColorForTheme,
+} from '@grafana/data';
+import { graphTimeFormat } from '@grafana/ui';
+import { config } from 'app/core/config';
 
 const MIN_CARD_SIZE = 1,
   CARD_PADDING = 1,
   CARD_ROUND = 0,
   DATA_RANGE_WIDING_FACTOR = 1.2,
   DEFAULT_X_TICK_SIZE_PX = 100,
-  DEFAULT_Y_TICK_SIZE_PX = 50,
+  DEFAULT_Y_TICK_SIZE_PX = 22.5,
   X_AXIS_TICK_PADDING = 10,
   Y_AXIS_TICK_PADDING = 5,
   MIN_SELECTION_WIDTH = 2;
 
-export default function rendering(scope, elem, attrs, ctrl) {
+export default function rendering(scope: any, elem: any, attrs: any, ctrl: any) {
   return new HeatmapRenderer(scope, elem, attrs, ctrl);
 }
 export class HeatmapRenderer {
-  width: number;
-  height: number;
+  width = 200;
+  height = 200;
   yScale: any;
   xScale: any;
-  chartWidth: number;
-  chartHeight: number;
-  chartTop: number;
-  chartBottom: number;
-  yAxisWidth: number;
-  xAxisHeight: number;
-  cardPadding: number;
-  cardRound: number;
-  cardWidth: number;
-  cardHeight: number;
+  chartWidth = 0;
+  chartHeight = 0;
+  chartTop = 0;
+  chartBottom = 0;
+  yAxisWidth = 0;
+  xAxisHeight = 0;
+  cardPadding = 0;
+  cardRound = 0;
+  cardWidth = 0;
+  cardHeight = 0;
   colorScale: any;
   opacityScale: any;
   mouseUpHandler: any;
@@ -51,7 +61,8 @@ export class HeatmapRenderer {
   padding: any;
   margin: any;
   dataRangeWidingFactor: number;
-  constructor(private scope, private elem, attrs, private ctrl) {
+
+  constructor(private scope: any, private elem: any, attrs: any, private ctrl: any) {
     // $heatmap is JQuery object, but heatmap is D3
     this.$heatmap = this.elem.find('.heatmap-panel');
     this.tooltip = new HeatmapTooltip(this.$heatmap, this.scope);
@@ -65,9 +76,7 @@ export class HeatmapRenderer {
     this.padding = { left: 0, right: 0, top: 0, bottom: 0 };
     this.margin = { left: 25, right: 15, top: 10, bottom: 20 };
     this.dataRangeWidingFactor = DATA_RANGE_WIDING_FACTOR;
-
-    this.ctrl.events.on('render', this.onRender.bind(this));
-
+    this.ctrl.events.on(PanelEvents.render, this.onRender.bind(this));
     this.ctrl.tickValueFormatter = this.tickValueFormatter.bind(this);
 
     /////////////////////////////
@@ -75,9 +84,8 @@ export class HeatmapRenderer {
     /////////////////////////////
 
     // Shared crosshair and tooltip
-    appEvents.on('graph-hover', this.onGraphHover.bind(this), this.scope);
-
-    appEvents.on('graph-hover-clear', this.onGraphHoverClear.bind(this), this.scope);
+    this.ctrl.dashboard.events.on(LegacyGraphHoverEvent.type, this.onGraphHover.bind(this), this.scope);
+    this.ctrl.dashboard.events.on(LegacyGraphHoverClearEvent.type, this.onGraphHoverClear.bind(this), this.scope);
 
     // Register selection listeners
     this.$heatmap.on('mousedown', this.onMouseDown.bind(this));
@@ -89,7 +97,7 @@ export class HeatmapRenderer {
     this.clearCrosshair();
   }
 
-  onGraphHover(event) {
+  onGraphHover(event: { pos: any }) {
     this.drawSharedCrosshair(event.pos);
   }
 
@@ -101,7 +109,7 @@ export class HeatmapRenderer {
   setElementHeight() {
     try {
       let height = this.ctrl.height || this.panel.height || this.ctrl.row.height;
-      if (_.isString(height)) {
+      if (isString(height)) {
         height = parseInt(height.replace('px', ''), 10);
       }
 
@@ -116,10 +124,10 @@ export class HeatmapRenderer {
     }
   }
 
-  getYAxisWidth(elem) {
+  getYAxisWidth(elem: any) {
     const axisText = elem.selectAll('.axis-y text').nodes();
-    const maxTextWidth = _.max(
-      _.map(axisText, text => {
+    const maxTextWidth = max(
+      map(axisText, (text) => {
         // Use SVG getBBox method
         return text.getBBox().width;
       })
@@ -128,7 +136,7 @@ export class HeatmapRenderer {
     return maxTextWidth;
   }
 
-  getXAxisHeight(elem) {
+  getXAxisHeight(elem: any) {
     const axisLine = elem.select('.axis-x line');
     if (!axisLine.empty()) {
       const axisLinePosition = parseFloat(elem.select('.axis-x line').attr('y2'));
@@ -147,19 +155,18 @@ export class HeatmapRenderer {
       .range([0, this.chartWidth]);
 
     const ticks = this.chartWidth / DEFAULT_X_TICK_SIZE_PX;
-    const grafanaTimeFormatter = ticksUtils.grafanaTimeFormat(ticks, this.timeRange.from, this.timeRange.to);
-    let timeFormat;
-    const dashboardTimeZone = this.ctrl.dashboard.getTimezone();
-    if (dashboardTimeZone === 'utc') {
-      timeFormat = d3.utcFormat(grafanaTimeFormatter);
-    } else {
-      timeFormat = d3.timeFormat(grafanaTimeFormatter);
-    }
+    const format = graphTimeFormat(ticks, this.timeRange.from.valueOf(), this.timeRange.to.valueOf());
+    const timeZone = this.ctrl.dashboard.getTimezone();
+    const formatter = (date: Date) =>
+      dateTimeFormat(date.valueOf(), {
+        format: format,
+        timeZone: timeZone,
+      });
 
     const xAxis = d3
       .axisBottom(this.xScale)
       .ticks(ticks)
-      .tickFormat(timeFormat)
+      .tickFormat(formatter)
       .tickPadding(X_AXIS_TICK_PADDING)
       .tickSize(this.chartHeight);
 
@@ -172,10 +179,7 @@ export class HeatmapRenderer {
       .call(xAxis);
 
     // Remove horizontal line in the top of axis labels (called domain in d3)
-    this.heatmap
-      .select('.axis-x')
-      .select('.domain')
-      .remove();
+    this.heatmap.select('.axis-x').select('.domain').remove();
   }
 
   addYAxis() {
@@ -200,7 +204,7 @@ export class HeatmapRenderer {
     this.ctrl.scaledDecimals = scaledDecimals;
 
     // Set default Y min and max if no data
-    if (_.isEmpty(this.data.buckets)) {
+    if (isEmpty(this.data.buckets)) {
       yMax = 1;
       yMin = -1;
       ticks = 3;
@@ -213,10 +217,7 @@ export class HeatmapRenderer {
       ticks: ticks,
     };
 
-    this.scope.yScale = this.yScale = d3
-      .scaleLinear()
-      .domain([yMin, yMax])
-      .range([this.chartHeight, 0]);
+    this.scope.yScale = this.yScale = d3.scaleLinear().domain([yMin, yMax]).range([this.chartHeight, 0]);
 
     const yAxis = d3
       .axisLeft(this.yScale)
@@ -226,10 +227,7 @@ export class HeatmapRenderer {
       .tickSizeOuter(0)
       .tickPadding(Y_AXIS_TICK_PADDING);
 
-    this.heatmap
-      .append('g')
-      .attr('class', 'axis axis-y')
-      .call(yAxis);
+    this.heatmap.append('g').attr('class', 'axis axis-y').call(yAxis);
 
     // Calculate Y axis width first, then move axis into visible area
     const posY = this.margin.top;
@@ -237,14 +235,11 @@ export class HeatmapRenderer {
     this.heatmap.select('.axis-y').attr('transform', 'translate(' + posX + ',' + posY + ')');
 
     // Remove vertical line in the right of axis labels (called domain in d3)
-    this.heatmap
-      .select('.axis-y')
-      .select('.domain')
-      .remove();
+    this.heatmap.select('.axis-y').select('.domain').remove();
   }
 
   // Wide Y values range and anjust to bucket size
-  wideYAxisRange(min, max, tickInterval) {
+  wideYAxisRange(min: number, max: number, tickInterval: number) {
     const yWiding = (max * (this.dataRangeWidingFactor - 1) - min * (this.dataRangeWidingFactor - 1)) / 2;
     let yMin, yMax;
 
@@ -273,7 +268,7 @@ export class HeatmapRenderer {
     yMax = this.panel.yAxis.max !== null ? this.adjustLogMax(this.panel.yAxis.max, logBase) : yMax;
 
     // Set default Y min and max if no data
-    if (_.isEmpty(this.data.buckets)) {
+    if (isEmpty(this.data.buckets)) {
       yMax = Math.pow(logBase, 2);
       yMin = 1;
     }
@@ -310,10 +305,7 @@ export class HeatmapRenderer {
       .tickSizeOuter(0)
       .tickPadding(Y_AXIS_TICK_PADDING);
 
-    this.heatmap
-      .append('g')
-      .attr('class', 'axis axis-y')
-      .call(yAxis);
+    this.heatmap.append('g').attr('class', 'axis axis-y').call(yAxis);
 
     // Calculate Y axis width first, then move axis into visible area
     const posY = this.margin.top;
@@ -322,72 +314,71 @@ export class HeatmapRenderer {
 
     // Set first tick as pseudo 0
     if (yMin < 1) {
-      this.heatmap
-        .select('.axis-y')
-        .select('.tick text')
-        .text('0');
+      this.heatmap.select('.axis-y').select('.tick text').text('0');
     }
 
     // Remove vertical line in the right of axis labels (called domain in d3)
-    this.heatmap
-      .select('.axis-y')
-      .select('.domain')
-      .remove();
+    this.heatmap.select('.axis-y').select('.domain').remove();
   }
 
   addYAxisFromBuckets() {
     const tsBuckets = this.data.tsBuckets;
+    let ticks = Math.ceil(this.chartHeight / DEFAULT_Y_TICK_SIZE_PX);
 
     this.scope.yScale = this.yScale = d3
       .scaleLinear()
       .domain([0, tsBuckets.length - 1])
       .range([this.chartHeight, 0]);
 
-    const tickValues = _.map(tsBuckets, (b, i) => i);
-    const decimalsAuto = _.max(_.map(tsBuckets, ticksUtils.getStringPrecision));
+    const tickValues = map(tsBuckets, (b, i) => i);
+    const decimalsAuto = max(map(tsBuckets, ticksUtils.getStringPrecision));
     const decimals = this.panel.yAxis.decimals === null ? decimalsAuto : this.panel.yAxis.decimals;
     this.ctrl.decimals = decimals;
 
     const tickValueFormatter = this.tickValueFormatter.bind(this);
-    function tickFormatter(valIndex) {
+    function tickFormatter(valIndex: string) {
       let valueFormatted = tsBuckets[valIndex];
-      if (!_.isNaN(_.toNumber(valueFormatted)) && valueFormatted !== '') {
+      if (!isNaN(toNumber(valueFormatted)) && valueFormatted !== '') {
         // Try to format numeric tick labels
-        valueFormatted = tickValueFormatter(decimals)(_.toNumber(valueFormatted));
+        valueFormatted = tickValueFormatter(decimals)(toNumber(valueFormatted));
       }
       return valueFormatted;
     }
 
-    const tsBucketsFormatted = _.map(tsBuckets, (v, i) => tickFormatter(i));
+    const tsBucketsFormatted = map(tsBuckets, (v, i) => tickFormatter(i));
     this.data.tsBucketsFormatted = tsBucketsFormatted;
 
     const yAxis = d3
       .axisLeft(this.yScale)
-      .tickValues(tickValues)
       .tickFormat(tickFormatter)
       .tickSizeInner(0 - this.width)
       .tickSizeOuter(0)
       .tickPadding(Y_AXIS_TICK_PADDING);
+    if (tickValues && tickValues.length <= ticks) {
+      yAxis.tickValues(tickValues);
+    } else {
+      yAxis.ticks(ticks);
+    }
 
-    this.heatmap
-      .append('g')
-      .attr('class', 'axis axis-y')
-      .call(yAxis);
+    this.heatmap.append('g').attr('class', 'axis axis-y').call(yAxis);
 
     // Calculate Y axis width first, then move axis into visible area
     const posY = this.margin.top;
     const posX = this.getYAxisWidth(this.heatmap) + Y_AXIS_TICK_PADDING;
     this.heatmap.select('.axis-y').attr('transform', 'translate(' + posX + ',' + posY + ')');
 
+    if (this.panel.yBucketBound === 'middle' && tickValues && tickValues.length) {
+      // Shift Y axis labels to the middle of bucket
+      const tickShift = 0 - this.chartHeight / (tickValues.length - 1) / 2;
+      this.heatmap.selectAll('.axis-y text').attr('transform', 'translate(' + 0 + ',' + tickShift + ')');
+    }
+
     // Remove vertical line in the right of axis labels (called domain in d3)
-    this.heatmap
-      .select('.axis-y')
-      .select('.domain')
-      .remove();
+    this.heatmap.select('.axis-y').select('.domain').remove();
   }
 
   // Adjust data range to log base
-  adjustLogRange(min, max, logBase) {
+  adjustLogRange(min: number, max: number, logBase: number) {
     let yMin = this.data.heatmapStats.minLog;
     if (this.data.heatmapStats.minLog > 1 || !this.data.heatmapStats.minLog) {
       yMin = 1;
@@ -401,15 +392,15 @@ export class HeatmapRenderer {
     return { yMin, yMax };
   }
 
-  adjustLogMax(max, base) {
+  adjustLogMax(max: number, base: number) {
     return Math.pow(base, Math.ceil(ticksUtils.logp(max, base)));
   }
 
-  adjustLogMin(min, base) {
+  adjustLogMin(min: number, base: number) {
     return Math.pow(base, Math.floor(ticksUtils.logp(min, base)));
   }
 
-  logScaleTickValues(domain, base) {
+  logScaleTickValues(domain: any[], base: number) {
     const domainMin = domain[0];
     const domainMax = domain[1];
     const tickValues = [];
@@ -431,23 +422,23 @@ export class HeatmapRenderer {
     return tickValues;
   }
 
-  tickValueFormatter(decimals, scaledDecimals = null) {
+  tickValueFormatter(decimals: number, scaledDecimals: any = null) {
     const format = this.panel.yAxis.format;
-    return value => {
+    return (value: any) => {
       try {
-        return format !== 'none' ? kbn.valueFormats[format](value, decimals, scaledDecimals) : value;
+        if (format !== 'none') {
+          const v = getValueFormat(format)(value, decimals, scaledDecimals);
+          return formattedValueToString(v);
+        }
       } catch (err) {
         console.error(err.message || err);
-        return value;
       }
+      return value;
     };
   }
 
   fixYAxisTickSize() {
-    this.heatmap
-      .select('.axis-y')
-      .selectAll('.tick line')
-      .attr('x2', this.chartWidth);
+    this.heatmap.select('.axis-y').selectAll('.tick line').attr('x2', this.chartWidth);
   }
 
   addAxes() {
@@ -472,17 +463,11 @@ export class HeatmapRenderer {
     this.xAxisHeight = this.getXAxisHeight(this.heatmap);
 
     if (!this.panel.yAxis.show) {
-      this.heatmap
-        .select('.axis-y')
-        .selectAll('line')
-        .style('opacity', 0);
+      this.heatmap.select('.axis-y').selectAll('line').style('opacity', 0);
     }
 
     if (!this.panel.xAxis.show) {
-      this.heatmap
-        .select('.axis-x')
-        .selectAll('line')
-        .style('opacity', 0);
+      this.heatmap.select('.axis-x').selectAll('line').style('opacity', 0);
     }
   }
 
@@ -499,11 +484,7 @@ export class HeatmapRenderer {
       this.heatmap.remove();
     }
 
-    this.heatmap = d3
-      .select(heatmapElem)
-      .append('svg')
-      .attr('width', this.width)
-      .attr('height', this.height);
+    this.heatmap = d3.select(heatmapElem).append('svg').attr('width', this.width).attr('height', this.height);
   }
 
   addHeatmap() {
@@ -514,19 +495,20 @@ export class HeatmapRenderer {
       const logBase = this.panel.yAxis.logBase;
       const domain = this.yScale.domain();
       const tickValues = this.logScaleTickValues(domain, logBase);
-      this.data.buckets = mergeZeroBuckets(this.data.buckets, _.min(tickValues));
+      this.data.buckets = mergeZeroBuckets(this.data.buckets, min(tickValues)!);
     }
 
     const cardsData = this.data.cards;
-    const maxValueAuto = this.data.cardStats.max;
-    const maxValue = this.panel.color.max || maxValueAuto;
-    const minValue = this.panel.color.min || 0;
-
-    const colorScheme = _.find(this.ctrl.colorSchemes, {
+    const cardStats = this.data.cardStats;
+    const maxValueAuto = cardStats.max;
+    const minValueAuto = Math.max(cardStats.min, 0);
+    const maxValue = isNil(this.panel.color.max) ? maxValueAuto : this.panel.color.max;
+    const minValue = isNil(this.panel.color.min) ? minValueAuto : this.panel.color.min;
+    const colorScheme: any = find(this.ctrl.colorSchemes, {
       value: this.panel.color.colorScheme,
     });
     this.colorScale = getColorScale(colorScheme, contextSrv.user.lightTheme, maxValue, minValue);
-    this.opacityScale = getOpacityScale(this.panel.color, maxValue);
+    this.opacityScale = getOpacityScale(this.panel.color, maxValue, minValue);
     this.setCardSize();
 
     let cards = this.heatmap.selectAll('.heatmap-card').data(cardsData);
@@ -548,20 +530,20 @@ export class HeatmapRenderer {
 
     const $cards = this.$heatmap.find('.heatmap-card');
     $cards
-      .on('mouseenter', event => {
+      .on('mouseenter', (event: any) => {
         this.tooltip.mouseOverBucket = true;
         this.highlightCard(event);
       })
-      .on('mouseleave', event => {
+      .on('mouseleave', (event: any) => {
         this.tooltip.mouseOverBucket = false;
         this.resetCardHighLight(event);
       });
   }
 
-  highlightCard(event) {
+  highlightCard(event: any) {
     const color = d3.select(event.target).style('fill');
-    const highlightColor = d3.color(color).darker(2);
-    const strokeColor = d3.color(color).brighter(4);
+    const highlightColor = d3.color(color)!.darker(2);
+    const strokeColor = d3.color(color)!.brighter(4);
     const currentCard = d3.select(event.target);
     this.tooltip.originalFillColor = color;
     currentCard
@@ -570,9 +552,8 @@ export class HeatmapRenderer {
       .style('stroke-width', 1);
   }
 
-  resetCardHighLight(event) {
-    d3
-      .select(event.target)
+  resetCardHighLight(event: any) {
+    d3.select(event.target)
       .style('fill', this.tooltip.originalFillColor)
       .style('stroke', this.tooltip.originalFillColor)
       .style('stroke-width', 0);
@@ -588,11 +569,12 @@ export class HeatmapRenderer {
       yGridSize = Math.floor((this.yScale(1) - this.yScale(base)) / splitFactor);
     }
 
-    this.cardWidth = xGridSize - this.cardPadding * 2;
+    const cardWidth = xGridSize - this.cardPadding * 2;
+    this.cardWidth = Math.max(cardWidth, MIN_CARD_SIZE);
     this.cardHeight = yGridSize ? yGridSize - this.cardPadding * 2 : 0;
   }
 
-  getCardX(d) {
+  getCardX(d: { x: any }) {
     let x;
     if (this.xScale(d.x) < 0) {
       // Cut card left to prevent overlay
@@ -604,25 +586,22 @@ export class HeatmapRenderer {
     return x;
   }
 
-  getCardWidth(d) {
-    let w;
+  getCardWidth(d: { x: any }) {
+    let w = this.cardWidth;
     if (this.xScale(d.x) < 0) {
       // Cut card left to prevent overlay
-      const cuttedWidth = this.xScale(d.x) + this.cardWidth;
-      w = cuttedWidth > 0 ? cuttedWidth : 0;
+      w = this.xScale(d.x) + this.cardWidth;
     } else if (this.xScale(d.x) + this.cardWidth > this.chartWidth) {
       // Cut card right to prevent overlay
       w = this.chartWidth - this.xScale(d.x) - this.cardPadding;
-    } else {
-      w = this.cardWidth;
     }
 
-    // Card width should be MIN_CARD_SIZE at least
-    w = Math.max(w, MIN_CARD_SIZE);
+    // Card width should be MIN_CARD_SIZE at least, but cut cards shouldn't be displayed
+    w = w > 0 ? Math.max(w, MIN_CARD_SIZE) : 0;
     return w;
   }
 
-  getCardY(d) {
+  getCardY(d: { y: number }) {
     let y = this.yScale(d.y) + this.chartTop - this.cardHeight - this.cardPadding;
     if (this.panel.yAxis.logBase !== 1 && d.y === 0) {
       y = this.chartBottom - this.cardHeight - this.cardPadding;
@@ -635,7 +614,7 @@ export class HeatmapRenderer {
     return y;
   }
 
-  getCardHeight(d) {
+  getCardHeight(d: { y: number }) {
     const y = this.yScale(d.y) + this.chartTop - this.cardHeight - this.cardPadding;
     let h = this.cardHeight;
 
@@ -660,15 +639,15 @@ export class HeatmapRenderer {
     return h;
   }
 
-  getCardColor(d) {
+  getCardColor(d: { count: any }) {
     if (this.panel.color.mode === 'opacity') {
-      return this.panel.color.cardColor;
+      return getColorForTheme(this.panel.color.cardColor, config.theme);
     } else {
       return this.colorScale(d.count);
     }
   }
 
-  getCardOpacity(d) {
+  getCardOpacity(d: { count: any }) {
     if (this.panel.color.mode === 'opacity') {
       return this.opacityScale(d.count);
     } else {
@@ -676,14 +655,14 @@ export class HeatmapRenderer {
     }
   }
 
-  getEventOffset(event) {
+  getEventOffset(event: any) {
     const elemOffset = this.$heatmap.offset();
     const x = Math.floor(event.clientX - elemOffset.left);
     const y = Math.floor(event.clientY - elemOffset.top);
     return { x, y };
   }
 
-  onMouseDown(event) {
+  onMouseDown(event: any) {
     const offset = this.getEventOffset(event);
     this.selection.active = true;
     this.selection.x1 = offset.x;
@@ -706,8 +685,8 @@ export class HeatmapRenderer {
       const timeTo = this.xScale.invert(Math.max(this.selection.x1, this.selection.x2) - this.yAxisWidth);
 
       this.ctrl.timeSrv.setTime({
-        from: moment.utc(timeFrom),
-        to: moment.utc(timeTo),
+        from: toUtc(timeFrom),
+        to: toUtc(timeTo),
       });
     }
 
@@ -715,11 +694,11 @@ export class HeatmapRenderer {
   }
 
   onMouseLeave() {
-    appEvents.emit('graph-hover-clear');
+    this.ctrl.dashboard.events.publish(new LegacyGraphHoverClearEvent());
     this.clearCrosshair();
   }
 
-  onMouseMove(event) {
+  onMouseMove(event: any) {
     if (!this.heatmap) {
       return;
     }
@@ -740,10 +719,10 @@ export class HeatmapRenderer {
     }
   }
 
-  getEventPos(event, offset) {
+  getEventPos(event: { pageX: any; pageY: any }, offset: { x: any; y: any }) {
     const x = this.xScale.invert(offset.x - this.yAxisWidth).valueOf();
     const y = this.yScale.invert(offset.y - this.chartTop);
-    const pos = {
+    const pos: any = {
       pageX: event.pageX,
       pageY: event.pageY,
       x: x,
@@ -757,20 +736,20 @@ export class HeatmapRenderer {
     return pos;
   }
 
-  emitGraphHoverEvent(pos) {
+  emitGraphHoverEvent(pos: { panelRelY: number; offset: { y: number } }) {
     // Set minimum offset to prevent showing legend from another panel
     pos.panelRelY = Math.max(pos.offset.y / this.height, 0.001);
     // broadcast to other graph panels that we are hovering
-    appEvents.emit('graph-hover', { pos: pos, panel: this.panel });
+    this.ctrl.dashboard.events.publish(new LegacyGraphHoverEvent({ pos: pos, panel: this.panel }));
   }
 
-  limitSelection(x2) {
+  limitSelection(x2: number) {
     x2 = Math.max(x2, this.yAxisWidth);
     x2 = Math.min(x2, this.chartWidth + this.yAxisWidth);
     return x2;
   }
 
-  drawSelection(posX1, posX2) {
+  drawSelection(posX1: number, posX2: number) {
     if (this.heatmap) {
       this.heatmap.selectAll('.heatmap-selection').remove();
       const selectionX = Math.min(posX1, posX2);
@@ -797,7 +776,7 @@ export class HeatmapRenderer {
     }
   }
 
-  drawCrosshair(position) {
+  drawCrosshair(position: number) {
     if (this.heatmap) {
       this.heatmap.selectAll('.heatmap-crosshair').remove();
 
@@ -818,7 +797,7 @@ export class HeatmapRenderer {
     }
   }
 
-  drawSharedCrosshair(pos) {
+  drawSharedCrosshair(pos: { x: any }) {
     if (this.heatmap && this.ctrl.dashboard.graphTooltip !== 0) {
       const posX = this.xScale(pos.x) + this.yAxisWidth;
       this.drawCrosshair(posX);
@@ -841,7 +820,7 @@ export class HeatmapRenderer {
     }
 
     // Draw default axes and return if no data
-    if (_.isEmpty(this.data.buckets)) {
+    if (isEmpty(this.data.buckets)) {
       this.addHeatmapCanvas();
       this.addAxes();
       return;

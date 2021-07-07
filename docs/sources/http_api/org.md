@@ -2,11 +2,7 @@
 title = "Organization HTTP API "
 description = "Grafana Organization HTTP API"
 keywords = ["grafana", "http", "documentation", "api", "organization"]
-aliases = ["/http_api/organization/"]
-type = "docs"
-[menu.docs]
-name = "Organization"
-parent = "http_api"
+aliases = ["/docs/grafana/latest/http_api/organization/"]
 +++
 
 
@@ -47,6 +43,9 @@ Content-Type: application/json
 
 `GET /api/org/users`
 
+Returns all org users within the current organization.
+Accessible to users with org admin role.
+
 **Example Request**:
 
 ```http
@@ -64,11 +63,47 @@ Content-Type: application/json
 
 [
   {
-    "orgId":1,
-    "userId":1,
-    "email":"admin@mygraf.com",
-    "login":"admin",
-    "role":"Admin"
+    "orgId": 1,
+    "userId": 1,
+    "email": "admin@localhost",
+    "avatarUrl": "/avatar/46d229b033af06a191ff2267bca9ae56",
+    "login": "admin",
+    "role": "Admin",
+    "lastSeenAt": "2019-08-09T11:02:49+02:00",
+    "lastSeenAtAge": "< 1m"
+  }
+]
+```
+
+### Get all users within the current organization (lookup)
+
+`GET /api/org/users/lookup`
+
+Returns all org users within the current organization, but with less detailed information.
+Accessible to users with org admin role, admin in any folder or admin of any team.
+Mainly used by Grafana UI for providing list of users when adding team members and
+when editing folder/dashboard permissions.
+
+**Example Request**:
+
+```http
+GET /api/org/users/lookup HTTP/1.1
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer eyJrIjoiT0tTcG1pUlY2RnVKZTFVaDFsNFZXdE9ZWmNrMkZYbk
+```
+
+**Example Response**:
+
+```http
+HTTP/1.1 200
+Content-Type: application/json
+
+[
+  {
+    "userId": 1,
+    "login": "admin",
+    "avatarUrl": "/avatar/46d229b033af06a191ff2267bca9ae56"
   }
 ]
 ```
@@ -173,7 +208,7 @@ Authorization: Bearer eyJrIjoiT0tTcG1pUlY2RnVKZTFVaDFsNFZXdE9ZWmNrMkZYbk
 HTTP/1.1 200
 Content-Type: application/json
 
-{"message":"User added to organization"}
+{"message":"User added to organization","userId":1}
 ```
 
 ## Admin Organizations API
@@ -270,7 +305,7 @@ Content-Type: application/json
 ```
 Note: The api will work in the following two ways
 1) Need to set GF_USERS_ALLOW_ORG_CREATE=true
-2) Set the config users.allow_org_create to true in ini file
+2) Set the config value users.allow_org_create to true in ini file
 
 **Example Response**:
 
@@ -286,7 +321,7 @@ Content-Type: application/json
 
 ### Search all Organizations
 
-`GET /api/orgs`
+`GET /api/orgs?perpage=10&page=1`
 
 Only works with Basic Authentication (username and password), see [introduction](#admin-organizations-api).
 
@@ -298,7 +333,9 @@ Accept: application/json
 Content-Type: application/json
 ```
 Note: The api will only work when you pass the admin name and password
-to the request http url, like http://admin:admin@localhost:3000/api/orgs
+to the request HTTP URL, like http://admin:admin@localhost:3000/api/orgs
+
+Default value for the `perpage` parameter is `1000` and for the `page` parameter is `0`.
 
 **Example Response**:
 
@@ -378,7 +415,7 @@ Accept: application/json
 Content-Type: application/json
 ```
 Note: The api will only work when you pass the admin name and password
-to the request http url, like http://admin:admin@localhost:3000/api/orgs/1/users
+to the request HTTP URL, like http://admin:admin@localhost:3000/api/orgs/1/users
 
 
 **Example Response**:
@@ -422,7 +459,7 @@ Content-Type: application/json
 HTTP/1.1 200
 Content-Type: application/json
 
-{"message":"User added to organization"}
+{"message":"User added to organization", "userId": 1}
 ```
 
 ### Update Users in Organization

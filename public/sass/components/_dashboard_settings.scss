@@ -1,36 +1,29 @@
 .dashboard-settings {
-  opacity: 0;
+  position: fixed;
   height: 100%;
+  width: 100%;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: $zindex-sidemenu;
+  background: $dashboard-bg;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-settings__body {
+  min-height: 100%;
+  width: 100%;
   display: flex;
   flex-direction: row;
-}
-
-.dashboard-page--settings-opening {
-  .dashboard-container {
-    display: none;
-  }
-}
-
-.dashboard-page--settings-open {
-  .dashboard-settings {
-    opacity: 1;
-    transition: opacity 300ms ease-in-out;
-  }
-}
-
-.dashboard-settings__content {
-  flex-grow: 1;
-  min-width: 0;
-  height: 100%;
-  padding: 30px;
-  max-width: 1100px;
+  background: $panel-bg;
 }
 
 .dashboard-settings__aside {
-  padding: 27px 0 0 30px;
-  background: $panel-bg;
   display: flex;
   flex-direction: column;
+  margin-top: $spacer;
 }
 
 .dashboard-settings__aside-header {
@@ -38,7 +31,7 @@
   font-size: $font-size-h3;
   padding-right: 60px;
   white-space: nowrap;
-  margin-bottom: $spacer;
+  margin-bottom: $space-md;
 
   i {
     font-size: 25px;
@@ -50,34 +43,49 @@
 
 .dashboard-settings__header {
   font-size: $font-size-h3;
-  margin-bottom: $spacer*2;
+  margin-bottom: $space-md;
 }
 
 .dashboard-settings__subheader {
   color: $text-muted;
   font-style: italic;
   position: relative;
-  top: -1.5rem;
+  top: -$space-lg;
 }
 
 .dashboard-settings__nav-item {
-  padding: 7px 12px;
-  color: $text-color;
+  padding: 8px 40px 8px 8px;
+  color: $text-color-weak;
   font-size: $font-size-md;
+  line-height: 20px;
+  position: relative;
   @include left-brand-border;
 
   &.active {
-    @include left-brand-border-gradient();
-    background: $page-bg;
+    color: $text-color;
+    font-weight: $font-weight-semi-bold;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 4px;
+      border-radius: 4px;
+      background: $brand-gradient-vertical;
+    }
   }
 
   .gicon {
     margin-bottom: 2px;
+    margin-right: 4px;
   }
 
   .fa {
     font-size: 17px;
     width: 16px;
+    margin-right: 4px;
   }
 }
 
@@ -86,13 +94,13 @@
   flex-direction: column;
   height: 100%;
   flex-grow: 1;
-  margin: $spacer*3 $spacer*2 0 0;
+  margin: 40px $space-xl 0 0;
 
   button {
-    margin-bottom: 10px;
+    margin-bottom: $space-sm;
   }
 }
 
 .dashboard-settings__json-save-button {
-  margin-top: $spacer;
+  margin-top: $space-md;
 }
