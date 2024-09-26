@@ -1,77 +1,89 @@
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import React from 'react';
-import { shallow } from 'enzyme';
+import { TestProvider } from 'test/helpers/TestProvider';
+
+import { contextSrv } from 'app/core/services/context_srv';
+
+import { Team } from '../../types';
+
 import { Props, TeamList } from './TeamList';
-import { NavModel, Team } from '../../types';
 import { getMockTeam, getMultipleMockTeams } from './__mocks__/teamMocks';
+
+jest.mock('app/core/core', () => ({
+  contextSrv: {
+    hasPermission: (action: string) => true,
+    licensedAccessControlEnabled: () => false,
+  },
+}));
 
 const setup = (propOverrides?: object) => {
   const props: Props = {
-    navModel: {} as NavModel,
     teams: [] as Team[],
+    noTeams: false,
     loadTeams: jest.fn(),
     deleteTeam: jest.fn(),
-    setSearchQuery: jest.fn(),
-    searchQuery: '',
-    teamsCount: 0,
+    changePage: jest.fn(),
+    changeQuery: jest.fn(),
+    changeSort: jest.fn(),
+    query: '',
+    totalPages: 0,
+    page: 0,
     hasFetched: false,
+    perPage: 10,
+    rolesLoading: false,
   };
 
   Object.assign(props, propOverrides);
 
-  const wrapper = shallow(<TeamList {...props} />);
-  const instance = wrapper.instance() as TeamList;
-
-  return {
-    wrapper,
-    instance,
-  };
+  render(
+    <TestProvider>
+      <TeamList {...props} />
+    </TestProvider>
+  );
 };
 
-describe('Render', () => {
-  it('should render component', () => {
-    const { wrapper } = setup();
-    expect(wrapper).toMatchSnapshot();
-  });
-
+describe('TeamList', () => {
   it('should render teams table', () => {
-    const { wrapper } = setup({
-      teams: getMultipleMockTeams(5),
-      teamsCount: 5,
-      hasFetched: true,
-    });
+    setup({ teams: getMultipleMockTeams(5), teamsCount: 5, hasFetched: true });
+    expect(screen.getAllByRole('row')).toHaveLength(6); // 5 teams plus table header row
+  });
 
-    expect(wrapper).toMatchSnapshot();
+  describe('when user has access to create a team', () => {
+    it('should enable the new team button', () => {
+      jest.spyOn(contextSrv, 'hasPermission').mockReturnValue(true);
+      setup({
+        teams: getMultipleMockTeams(1),
+        totalCount: 1,
+        hasFetched: true,
+      });
+
+      expect(screen.getByRole('link', { name: /new team/i })).not.toHaveStyle('pointer-events: none');
+    });
+  });
+
+  describe('when user does not have access to create a team', () => {
+    it('should disable the new team button', () => {
+      jest.spyOn(contextSrv, 'hasPermission').mockReturnValue(false);
+      setup({
+        teams: getMultipleMockTeams(1),
+        totalCount: 1,
+        hasFetched: true,
+      });
+
+      expect(screen.getByRole('link', { name: /new team/i })).toHaveStyle('pointer-events: none');
+    });
   });
 });
 
-describe('Life cycle', () => {
-  it('should call loadTeams', () => {
-    const { instance } = setup();
-
-    instance.componentDidMount();
-
-    expect(instance.props.loadTeams).toHaveBeenCalled();
-  });
-});
-
-describe('Functions', () => {
-  describe('Delete team', () => {
-    it('should call delete team', () => {
-      const { instance } = setup();
-      instance.deleteTeam(getMockTeam());
-
-      expect(instance.props.deleteTeam).toHaveBeenCalledWith(1);
-    });
-  });
-
-  describe('on search query change', () => {
-    it('should call setSearchQuery', () => {
-      const { instance } = setup();
-      const mockEvent = { target: { value: 'test' } };
-
-      instance.onSearchQueryChange(mockEvent);
-
-      expect(instance.props.setSearchQuery).toHaveBeenCalledWith('test');
-    });
+it('should call delete team', async () => {
+  const mockDelete = jest.fn();
+  const mockTeam = getMockTeam();
+  jest.spyOn(contextSrv, 'hasPermissionInMetadata').mockReturnValue(true);
+  setup({ deleteTeam: mockDelete, teams: [mockTeam], totalCount: 1, hasFetched: true });
+  await userEvent.click(screen.getByRole('button', { name: `Delete team ${mockTeam.name}` }));
+  await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  await waitFor(() => {
+    expect(mockDelete).toHaveBeenCalledWith(mockTeam.id);
   });
 });

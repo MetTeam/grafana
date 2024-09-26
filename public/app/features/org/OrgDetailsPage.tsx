@@ -1,56 +1,70 @@
 import React, { PureComponent } from 'react';
-import { hot } from 'react-hot-loader';
-import { connect } from 'react-redux';
-import PageHeader from '../../core/components/PageHeader/PageHeader';
-import PageLoader from '../../core/components/PageLoader/PageLoader';
-import OrgProfile from './OrgProfile';
-import SharedPreferences from 'app/core/components/SharedPreferences/SharedPreferences';
-import { loadOrganization, setOrganizationName, updateOrganization } from './state/actions';
-import { NavModel, Organization, StoreState } from 'app/types';
-import { getNavModel } from '../../core/selectors/navModel';
+import { ConnectedProps, connect } from 'react-redux';
 
-export interface Props {
-  navModel: NavModel;
-  organization: Organization;
-  loadOrganization: typeof loadOrganization;
-  setOrganizationName: typeof setOrganizationName;
-  updateOrganization: typeof updateOrganization;
-}
+import { VerticalGroup } from '@grafana/ui';
+import { Page } from 'app/core/components/Page/Page';
+import SharedPreferences from 'app/core/components/SharedPreferences/SharedPreferences';
+import { appEvents, contextSrv } from 'app/core/core';
+import { getNavModel } from 'app/core/selectors/navModel';
+import { AccessControlAction, StoreState } from 'app/types';
+import { ShowConfirmModalEvent } from 'app/types/events';
+
+import OrgProfile from './OrgProfile';
+import { loadOrganization, updateOrganization } from './state/actions';
+import { setOrganizationName } from './state/reducers';
+
+interface OwnProps {}
 
 export class OrgDetailsPage extends PureComponent<Props> {
   async componentDidMount() {
     await this.props.loadOrganization();
   }
 
-  onOrgNameChange = name => {
-    this.props.setOrganizationName(name);
+  onUpdateOrganization = (orgName: string) => {
+    this.props.setOrganizationName(orgName);
+    this.props.updateOrganization();
   };
 
-  onUpdateOrganization = () => {
-    this.props.updateOrganization();
+  handleConfirm = () => {
+    return new Promise<boolean>((resolve) => {
+      appEvents.publish(
+        new ShowConfirmModalEvent({
+          title: 'Confirm preferences update',
+          text: 'This will update the preferences for the whole organization. Are you sure you want to update the preferences?',
+          yesText: 'Save',
+          yesButtonVariant: 'primary',
+          onConfirm: async () => resolve(true),
+          onDismiss: async () => resolve(false),
+        })
+      );
+    });
   };
 
   render() {
     const { navModel, organization } = this.props;
     const isLoading = Object.keys(organization).length === 0;
+    const canReadOrg = contextSrv.hasPermission(AccessControlAction.OrgsRead);
+    const canReadPreferences = contextSrv.hasPermission(AccessControlAction.OrgsPreferencesRead);
+    const canWritePreferences = contextSrv.hasPermission(AccessControlAction.OrgsPreferencesWrite);
 
     return (
-      <div>
-        <PageHeader model={navModel} />
-        <div className="page-container page-body">
-          {isLoading && <PageLoader pageName="Organization" />}
+      <Page navModel={navModel}>
+        <Page.Contents isLoading={isLoading}>
           {!isLoading && (
-            <div>
-              <OrgProfile
-                onOrgNameChange={name => this.onOrgNameChange(name)}
-                onSubmit={this.onUpdateOrganization}
-                orgName={organization.name}
-              />
-              <SharedPreferences resourceUri="org" />
-            </div>
+            <VerticalGroup spacing="lg">
+              {canReadOrg && <OrgProfile onSubmit={this.onUpdateOrganization} orgName={organization.name} />}
+              {canReadPreferences && (
+                <SharedPreferences
+                  resourceUri="org"
+                  disabled={!canWritePreferences}
+                  preferenceType="org"
+                  onConfirm={this.handleConfirm}
+                />
+              )}
+            </VerticalGroup>
           )}
-        </div>
-      </div>
+        </Page.Contents>
+      </Page>
     );
   }
 }
@@ -68,4 +82,7 @@ const mapDispatchToProps = {
   updateOrganization,
 };
 
-export default hot(module)(connect(mapStateToProps, mapDispatchToProps)(OrgDetailsPage));
+const connector = connect(mapStateToProps, mapDispatchToProps);
+export type Props = OwnProps & ConnectedProps<typeof connector>;
+
+export default connector(OrgDetailsPage);

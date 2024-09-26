@@ -3,10 +3,8 @@
     "tags": [
       "apa"
     ],
-    "style": "dark",
-    "timezone": "browser",
+      "timezone": "browser",
     "editable": true,
-    "hideControls": false,
     "sharedCrosshair": false,
     "rows": [
       {
@@ -44,7 +42,10 @@
               "noDataState": "no_data",
               "notifications": [
                 {
-                  "id": 6
+                  "uid": "notifier1"
+                },
+                {
+                  "id": 2
                 }
               ]
             },

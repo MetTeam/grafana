@@ -1,161 +1,93 @@
-import React, { PureComponent } from 'react';
+import { createSelector } from '@reduxjs/toolkit';
+import React, { useCallback, useMemo } from 'react';
 
-import { QueryTransaction, HistoryItem, QueryHint } from 'app/types/explore';
-import { Emitter } from 'app/core/utils/emitter';
+import { CoreApp } from '@grafana/data';
+import { reportInteraction } from '@grafana/runtime';
+import { DataQuery } from '@grafana/schema';
+import { getNextRefIdChar } from 'app/core/utils/query';
+import { useDispatch, useSelector } from 'app/types';
 
-// import DefaultQueryField from './QueryField';
-import QueryEditor from './QueryEditor';
-import QueryTransactionStatus from './QueryTransactionStatus';
-import { DataSource, DataQuery } from 'app/types';
-import { RawTimeRange } from '@grafana/ui';
+import { getDatasourceSrv } from '../plugins/datasource_srv';
+import { QueryEditorRows } from '../query/components/QueryEditorRows';
 
-function getFirstHintFromTransactions(transactions: QueryTransaction[]): QueryHint {
-  const transaction = transactions.find(qt => qt.hints && qt.hints.length > 0);
-  if (transaction) {
-    return transaction.hints[0];
-  }
-  return undefined;
+import { changeQueries, runQueries } from './state/query';
+import { getExploreItemSelector } from './state/selectors';
+
+interface Props {
+  exploreId: string;
 }
 
-interface QueryRowEventHandlers {
-  onAddQueryRow: (index: number) => void;
-  onChangeQuery: (value: DataQuery, index: number, override?: boolean) => void;
-  onClickHintFix: (action: object, index?: number) => void;
-  onExecuteQuery: () => void;
-  onRemoveQueryRow: (index: number) => void;
-}
+const makeSelectors = (exploreId: string) => {
+  const exploreItemSelector = getExploreItemSelector(exploreId);
+  return {
+    getQueries: createSelector(exploreItemSelector, (s) => s!.queries),
+    getQueryResponse: createSelector(exploreItemSelector, (s) => s!.queryResponse),
+    getHistory: createSelector(exploreItemSelector, (s) => s!.history),
+    getEventBridge: createSelector(exploreItemSelector, (s) => s!.eventBridge),
+    getDatasourceInstanceSettings: createSelector(
+      exploreItemSelector,
+      (s) => getDatasourceSrv().getInstanceSettings(s!.datasourceInstance?.uid)!
+    ),
+  };
+};
 
-interface QueryRowCommonProps {
-  className?: string;
-  datasource: DataSource;
-  history: HistoryItem[];
-  transactions: QueryTransaction[];
-  exploreEvents: Emitter;
-  range: RawTimeRange;
-}
+export const QueryRows = ({ exploreId }: Props) => {
+  const dispatch = useDispatch();
+  const { getQueries, getDatasourceInstanceSettings, getQueryResponse, getHistory, getEventBridge } = useMemo(
+    () => makeSelectors(exploreId),
+    [exploreId]
+  );
 
-type QueryRowProps = QueryRowCommonProps &
-  QueryRowEventHandlers & {
-    index: number;
-    initialQuery: DataQuery;
+  const queries = useSelector(getQueries);
+  const dsSettings = useSelector(getDatasourceInstanceSettings);
+  const queryResponse = useSelector(getQueryResponse);
+  const history = useSelector(getHistory);
+  const eventBridge = useSelector(getEventBridge);
+
+  const onRunQueries = useCallback(() => {
+    dispatch(runQueries({ exploreId }));
+  }, [dispatch, exploreId]);
+
+  const onChange = useCallback(
+    (newQueries: DataQuery[]) => {
+      dispatch(changeQueries({ exploreId, queries: newQueries }));
+    },
+    [dispatch, exploreId]
+  );
+
+  const onAddQuery = useCallback(
+    (query: DataQuery) => {
+      onChange([...queries, { ...query, refId: getNextRefIdChar(queries) }]);
+    },
+    [onChange, queries]
+  );
+
+  const onQueryCopied = () => {
+    reportInteraction('grafana_explore_query_row_copy');
   };
 
-class QueryRow extends PureComponent<QueryRowProps> {
-  onExecuteQuery = () => {
-    const { onExecuteQuery } = this.props;
-    onExecuteQuery();
+  const onQueryRemoved = () => {
+    reportInteraction('grafana_explore_query_row_remove');
   };
 
-  onChangeQuery = (value: DataQuery, override?: boolean) => {
-    const { index, onChangeQuery } = this.props;
-    if (onChangeQuery) {
-      onChangeQuery(value, index, override);
-    }
+  const onQueryToggled = (queryStatus?: boolean) => {
+    reportInteraction('grafana_query_row_toggle', queryStatus === undefined ? {} : { queryEnabled: queryStatus });
   };
 
-  onClickAddButton = () => {
-    const { index, onAddQueryRow } = this.props;
-    if (onAddQueryRow) {
-      onAddQueryRow(index);
-    }
-  };
-
-  onClickClearButton = () => {
-    this.onChangeQuery(null, true);
-  };
-
-  onClickHintFix = action => {
-    const { index, onClickHintFix } = this.props;
-    if (onClickHintFix) {
-      onClickHintFix(action, index);
-    }
-  };
-
-  onClickRemoveButton = () => {
-    const { index, onRemoveQueryRow } = this.props;
-    if (onRemoveQueryRow) {
-      onRemoveQueryRow(index);
-    }
-  };
-
-  onPressEnter = () => {
-    const { onExecuteQuery } = this.props;
-    if (onExecuteQuery) {
-      onExecuteQuery();
-    }
-  };
-
-  render() {
-    const { datasource, history, initialQuery, transactions, exploreEvents, range } = this.props;
-    const transactionWithError = transactions.find(t => t.error !== undefined);
-    const hint = getFirstHintFromTransactions(transactions);
-    const queryError = transactionWithError ? transactionWithError.error : null;
-    const QueryField = datasource.pluginExports.ExploreQueryField;
-    return (
-      <div className="query-row">
-        <div className="query-row-status">
-          <QueryTransactionStatus transactions={transactions} />
-        </div>
-        <div className="query-row-field">
-          {QueryField ? (
-            <QueryField
-              datasource={datasource}
-              error={queryError}
-              hint={hint}
-              initialQuery={initialQuery}
-              history={history}
-              onClickHintFix={this.onClickHintFix}
-              onPressEnter={this.onPressEnter}
-              onQueryChange={this.onChangeQuery}
-            />
-          ) : (
-            <QueryEditor
-              datasource={datasource}
-              error={queryError}
-              onQueryChange={this.onChangeQuery}
-              onExecuteQuery={this.onExecuteQuery}
-              initialQuery={initialQuery}
-              exploreEvents={exploreEvents}
-              range={range}
-            />
-          )}
-        </div>
-        <div className="query-row-tools">
-          <button className="btn navbar-button navbar-button--tight" onClick={this.onClickClearButton}>
-            <i className="fa fa-times" />
-          </button>
-          <button className="btn navbar-button navbar-button--tight" onClick={this.onClickAddButton}>
-            <i className="fa fa-plus" />
-          </button>
-          <button className="btn navbar-button navbar-button--tight" onClick={this.onClickRemoveButton}>
-            <i className="fa fa-minus" />
-          </button>
-        </div>
-      </div>
-    );
-  }
-}
-
-type QueryRowsProps = QueryRowCommonProps &
-  QueryRowEventHandlers & {
-    initialQueries: DataQuery[];
-  };
-
-export default class QueryRows extends PureComponent<QueryRowsProps> {
-  render() {
-    const { className = '', initialQueries, transactions, ...handlers } = this.props;
-    return (
-      <div className={className}>
-        {initialQueries.map((query, index) => (
-          <QueryRow
-            key={query.key}
-            index={index}
-            initialQuery={query}
-            transactions={transactions.filter(t => t.rowIndex === index)}
-            {...handlers}
-          />
-        ))}
-      </div>
-    );
-  }
-}
+  return (
+    <QueryEditorRows
+      dsSettings={dsSettings}
+      queries={queries}
+      onQueriesChange={onChange}
+      onAddQuery={onAddQuery}
+      onRunQueries={onRunQueries}
+      onQueryCopied={onQueryCopied}
+      onQueryRemoved={onQueryRemoved}
+      onQueryToggled={onQueryToggled}
+      data={queryResponse}
+      app={CoreApp.Explore}
+      history={history}
+      eventBus={eventBridge}
+    />
+  );
+};

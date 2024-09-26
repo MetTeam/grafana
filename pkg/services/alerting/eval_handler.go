@@ -5,22 +5,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/grafana/pkg/log"
-	"github.com/grafana/grafana/pkg/metrics"
+	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/infra/metrics"
+	"github.com/grafana/grafana/pkg/tsdb/legacydata"
 )
 
+// DefaultEvalHandler is responsible for evaluating the alert rule.
 type DefaultEvalHandler struct {
 	log             log.Logger
 	alertJobTimeout time.Duration
+	requestHandler  legacydata.RequestHandler
 }
 
-func NewEvalHandler() *DefaultEvalHandler {
+// NewEvalHandler is the `DefaultEvalHandler` constructor.
+func NewEvalHandler(requestHandler legacydata.RequestHandler) *DefaultEvalHandler {
 	return &DefaultEvalHandler{
 		log:             log.New("alerting.evalHandler"),
 		alertJobTimeout: time.Second * 5,
+		requestHandler:  requestHandler,
 	}
 }
 
+// Eval evaluated the alert rule.
 func (e *DefaultEvalHandler) Eval(context *EvalContext) {
 	firing := true
 	noDataFound := true
@@ -28,7 +34,7 @@ func (e *DefaultEvalHandler) Eval(context *EvalContext) {
 
 	for i := 0; i < len(context.Rule.Conditions); i++ {
 		condition := context.Rule.Conditions[i]
-		cr, err := condition.Eval(context)
+		cr, err := condition.Eval(context, e.requestHandler)
 		if err != nil {
 			context.Error = err
 		}
@@ -46,11 +52,14 @@ func (e *DefaultEvalHandler) Eval(context *EvalContext) {
 		// calculating Firing based on operator
 		if cr.Operator == "or" {
 			firing = firing || cr.Firing
-			noDataFound = noDataFound || cr.NoDataFound
 		} else {
 			firing = firing && cr.Firing
-			noDataFound = noDataFound && cr.NoDataFound
 		}
+
+		// We cannot evaluate the expression when one or more conditions are missing data
+		// and so noDataFound should be true if at least one condition returns no data,
+		// irrespective of the operator.
+		noDataFound = noDataFound || cr.NoDataFound
 
 		if i > 0 {
 			conditionEvals = "[" + conditionEvals + " " + strings.ToUpper(cr.Operator) + " " + strconv.FormatBool(cr.Firing) + "]"
@@ -59,6 +68,7 @@ func (e *DefaultEvalHandler) Eval(context *EvalContext) {
 		}
 
 		context.EvalMatches = append(context.EvalMatches, cr.EvalMatches...)
+		context.AllMatches = append(context.AllMatches, cr.AllMatches...)
 	}
 
 	context.ConditionEvals = conditionEvals + " = " + strconv.FormatBool(firing)
@@ -67,5 +77,5 @@ func (e *DefaultEvalHandler) Eval(context *EvalContext) {
 	context.EndTime = time.Now()
 
 	elapsedTime := context.EndTime.Sub(context.StartTime).Nanoseconds() / int64(time.Millisecond)
-	metrics.M_Alerting_Execution_Time.Observe(float64(elapsedTime))
+	metrics.MAlertingExecutionTime.Observe(float64(elapsedTime))
 }

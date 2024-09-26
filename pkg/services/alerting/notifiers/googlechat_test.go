@@ -3,51 +3,51 @@ package notifiers
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/grafana/grafana/pkg/components/simplejson"
-	m "github.com/grafana/grafana/pkg/models"
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/grafana/grafana/pkg/services/alerting/models"
+	encryptionservice "github.com/grafana/grafana/pkg/services/encryption/service"
 )
 
 func TestGoogleChatNotifier(t *testing.T) {
-	Convey("Google Hangouts Chat notifier tests", t, func() {
+	encryptionService := encryptionservice.SetupTestService(t)
 
-		Convey("Parsing alert notification from settings", func() {
-			Convey("empty settings should return error", func() {
-				json := `{ }`
+	t.Run("Parsing alert notification from settings", func(t *testing.T) {
+		t.Run("empty settings should return error", func(t *testing.T) {
+			json := `{ }`
 
-				settingsJSON, _ := simplejson.NewJson([]byte(json))
-				model := &m.AlertNotification{
-					Name:     "ops",
-					Type:     "googlechat",
-					Settings: settingsJSON,
-				}
+			settingsJSON, _ := simplejson.NewJson([]byte(json))
+			model := &models.AlertNotification{
+				Name:     "ops",
+				Type:     "googlechat",
+				Settings: settingsJSON,
+			}
 
-				_, err := NewGoogleChatNotifier(model)
-				So(err, ShouldNotBeNil)
-			})
+			_, err := newGoogleChatNotifier(model, encryptionService.GetDecryptedValue, nil)
+			require.Error(t, err)
+		})
 
-			Convey("from settings", func() {
-				json := `
+		t.Run("from settings", func(t *testing.T) {
+			json := `
 				{
           			"url": "http://google.com"
 				}`
 
-				settingsJSON, _ := simplejson.NewJson([]byte(json))
-				model := &m.AlertNotification{
-					Name:     "ops",
-					Type:     "googlechat",
-					Settings: settingsJSON,
-				}
+			settingsJSON, _ := simplejson.NewJson([]byte(json))
+			model := &models.AlertNotification{
+				Name:     "ops",
+				Type:     "googlechat",
+				Settings: settingsJSON,
+			}
 
-				not, err := NewGoogleChatNotifier(model)
-				webhookNotifier := not.(*GoogleChatNotifier)
+			not, err := newGoogleChatNotifier(model, encryptionService.GetDecryptedValue, nil)
+			webhookNotifier := not.(*GoogleChatNotifier)
 
-				So(err, ShouldBeNil)
-				So(webhookNotifier.Name, ShouldEqual, "ops")
-				So(webhookNotifier.Type, ShouldEqual, "googlechat")
-				So(webhookNotifier.Url, ShouldEqual, "http://google.com")
-			})
-
+			require.Nil(t, err)
+			require.Equal(t, "ops", webhookNotifier.Name)
+			require.Equal(t, "googlechat", webhookNotifier.Type)
+			require.Equal(t, "http://google.com", webhookNotifier.URL)
 		})
 	})
 }

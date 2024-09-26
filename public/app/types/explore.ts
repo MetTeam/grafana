@@ -1,186 +1,297 @@
-import { Value } from 'slate';
+import { Observable, SubscriptionLike, Unsubscribable } from 'rxjs';
 
-import { DataQuery } from './series';
-import { RawTimeRange } from '@grafana/ui';
-import TableModel from 'app/core/table_model';
-import { LogsModel } from 'app/core/logs_model';
-import { DataSourceSelectItem } from 'app/types/datasources';
+import {
+  AbsoluteTimeRange,
+  DataFrame,
+  DataQuery,
+  DataQueryRequest,
+  DataSourceApi,
+  HistoryItem,
+  LogsModel,
+  PanelData,
+  RawTimeRange,
+  TimeRange,
+  EventBusExtended,
+  DataQueryResponse,
+  ExplorePanelsState,
+  SupplementaryQueryType,
+  UrlQueryMap,
+  ExploreCorrelationHelperData,
+  DataLinkTransformationConfig,
+} from '@grafana/data';
+import { RichHistorySearchFilters, RichHistorySettings } from 'app/core/utils/richHistoryTypes';
 
-export interface CompletionItem {
-  /**
-   * The label of this completion item. By default
-   * this is also the text that is inserted when selecting
-   * this completion.
-   */
-  label: string;
-  /**
-   * The kind of this completion item. Based on the kind
-   * an icon is chosen by the editor.
-   */
-  kind?: string;
-  /**
-   * A human-readable string with additional information
-   * about this item, like type or symbol information.
-   */
-  detail?: string;
-  /**
-   * A human-readable string, can be Markdown, that represents a doc-comment.
-   */
-  documentation?: string;
-  /**
-   * A string that should be used when comparing this item
-   * with other items. When `falsy` the `label` is used.
-   */
-  sortText?: string;
-  /**
-   * A string that should be used when filtering a set of
-   * completion items. When `falsy` the `label` is used.
-   */
-  filterText?: string;
-  /**
-   * A string or snippet that should be inserted in a document when selecting
-   * this completion. When `falsy` the `label` is used.
-   */
-  insertText?: string;
-  /**
-   * Delete number of characters before the caret position,
-   * by default the letters from the beginning of the word.
-   */
-  deleteBackwards?: number;
-  /**
-   * Number of steps to move after the insertion, can be negative.
-   */
-  move?: number;
+import { CorrelationData } from '../features/correlations/useCorrelations';
+
+export type ExploreQueryParams = UrlQueryMap;
+
+export enum CORRELATION_EDITOR_POST_CONFIRM_ACTION {
+  CLOSE_PANE,
+  CHANGE_DATASOURCE,
+  CLOSE_EDITOR,
 }
 
-export interface CompletionItemGroup {
+export interface CorrelationEditorDetails {
+  editorMode: boolean;
+  correlationDirty: boolean;
+  queryEditorDirty: boolean;
+  isExiting: boolean;
+  postConfirmAction?: {
+    // perform an action after a confirmation modal instead of exiting editor mode
+    exploreId: string;
+    action: CORRELATION_EDITOR_POST_CONFIRM_ACTION;
+    changeDatasourceUid?: string;
+    isActionLeft: boolean;
+  };
+  canSave?: boolean;
+  label?: string;
+  description?: string;
+  transformations?: DataLinkTransformationConfig[];
+}
+
+// updates can have any properties
+export interface CorrelationEditorDetailsUpdate extends Partial<CorrelationEditorDetails> {}
+
+/**
+ * Global Explore state
+ */
+export interface ExploreState {
   /**
-   * Label that will be displayed for all entries of this group.
+   * True if time interval for panels are synced. Only possible with split mode.
    */
-  label: string;
+  syncedTimes: boolean;
+
+  panes: Record<string, ExploreItemState | undefined>;
+
   /**
-   * List of suggestions of this group.
+   * Settings for rich history (note: filters are stored per each pane separately)
    */
-  items: CompletionItem[];
+  richHistorySettings?: RichHistorySettings;
+
   /**
-   * If true, match only by prefix (and not mid-word).
+   * True if local storage quota was exceeded when a rich history item was added. This is to prevent showing
+   * multiple errors when local storage is full.
    */
-  prefixMatch?: boolean;
+  richHistoryStorageFull: boolean;
+
   /**
-   * If true, do not filter items in this group based on the search.
+   * True if a warning message of hitting the exceeded number of items has been shown already.
    */
-  skipFilter?: boolean;
+  richHistoryLimitExceededWarningShown: boolean;
+
   /**
-   * If true, do not sort items.
+   * Details on a correlation being created from explore
    */
-  skipSort?: boolean;
-}
+  correlationEditorDetails?: CorrelationEditorDetails;
 
-export interface HistoryItem {
-  ts: number;
-  query: DataQuery;
-}
-
-export abstract class LanguageProvider {
-  datasource: any;
-  request: (url) => Promise<any>;
   /**
-   * Returns startTask that resolves with a task list when main syntax is loaded.
-   * Task list consists of secondary promises that load more detailed language features.
+   * On a split manual resize, we calculate which pane is larger, or if they are roughly the same size. If undefined, it is not split or they are roughly the same size
    */
-  start: () => Promise<any[]>;
-  startTask?: Promise<any[]>;
+  largerExploreId?: keyof ExploreState['panes'];
+
+  /**
+   * If a maximize pane button is pressed, this indicates which side was maximized. Will be undefined if not split or if it is manually resized
+   */
+  maxedExploreId?: keyof ExploreState['panes'];
+
+  /**
+   * If a minimize pane button is pressed, it will do an even split of panes. Will be undefined if split or on a manual resize
+   */
+  evenSplitPanes?: boolean;
 }
 
-export interface TypeaheadInput {
-  text: string;
-  prefix: string;
-  wrapperClasses: string[];
-  labelKey?: string;
-  value?: Value;
+export const EXPLORE_GRAPH_STYLES = ['lines', 'bars', 'points', 'stacked_lines', 'stacked_bars'] as const;
+export type ExploreGraphStyle = (typeof EXPLORE_GRAPH_STYLES)[number];
+
+export interface ExploreItemState {
+  /**
+   * Width used for calculating the graph interval (can't have more datapoints than pixels)
+   */
+  containerWidth: number;
+  /**
+   * Datasource instance that has been selected. Datasource-specific logic can be run on this object.
+   */
+  datasourceInstance?: DataSourceApi | null;
+  /**
+   * Emitter to send events to the rest of Grafana.
+   */
+  eventBridge: EventBusExtended;
+  /**
+   * List of timeseries to be shown in the Explore graph result viewer.
+   */
+  graphResult: DataFrame[] | null;
+  /**
+   * History of recent queries. Datasource-specific and initialized via localStorage.
+   */
+  history: HistoryItem[];
+  /**
+   * Queries for this Explore, e.g., set via URL. Each query will be
+   * converted to a query row.
+   */
+  queries: DataQuery[];
+  /**
+   * True if this Explore area has been initialized.
+   * Used to distinguish URL state injection versus split view state injection.
+   */
+  initialized: boolean;
+  /**
+   * Log query result to be displayed in the logs result viewer.
+   */
+  logsResult: LogsModel | null;
+
+  /**
+   * Time range for this Explore. Managed by the time picker and used by all query runs.
+   */
+  range: TimeRange;
+
+  absoluteRange: AbsoluteTimeRange;
+  /**
+   * True if scanning for more results is active.
+   */
+  scanning: boolean;
+  /**
+   * Current scanning range to be shown to the user while scanning is active.
+   */
+  scanRange?: RawTimeRange;
+
+  /**
+   * Table model that combines all query table results into a single table.
+   */
+  tableResult: DataFrame[] | null;
+
+  /**
+   * Simple UI that emulates native prometheus UI
+   */
+  rawPrometheusResult: DataFrame | null;
+
+  /**
+   * React keys for rendering of QueryRows
+   */
+  queryKeys: string[];
+
+  /**
+   * How often query should be refreshed
+   */
+  refreshInterval?: string;
+
+  /**
+   * If true, the view is in live tailing mode.
+   */
+  isLive: boolean;
+
+  /**
+   * If true, the live tailing view is paused.
+   */
+  isPaused: boolean;
+
+  /**
+   * Index of the last item in the list of logs
+   * when the live tailing views gets cleared.
+   */
+  clearedAtIndex: number | null;
+
+  querySubscription?: Unsubscribable;
+
+  queryResponse: ExplorePanelData;
+
+  showLogs?: boolean;
+  showMetrics?: boolean;
+  showTable?: boolean;
+  /**
+   * If true, the default "raw" prometheus instant query UI will be displayed in addition to table view
+   */
+  showRawPrometheus?: boolean;
+  showTrace?: boolean;
+  showNodeGraph?: boolean;
+  showFlameGraph?: boolean;
+  showCustom?: boolean;
+
+  /**
+   * History of all queries
+   */
+  richHistory: RichHistoryQuery[];
+  richHistorySearchFilters?: RichHistorySearchFilters;
+  richHistoryTotal?: number;
+
+  /**
+   * We are using caching to store query responses of queries run from logs navigation.
+   * In logs navigation, we do pagination and we don't want our users to unnecessarily run the same queries that they've run just moments before.
+   * We are currently caching last 5 query responses.
+   */
+  cache: Array<{ key: string; value: ExplorePanelData }>;
+
+  /**
+   * Supplementary queries are additional queries used in Explore, e.g. for logs volume
+   */
+  supplementaryQueries: SupplementaryQueries;
+
+  panelsState: ExplorePanelsState;
+
+  correlationEditorHelperData?: ExploreCorrelationHelperData;
+
+  correlations?: CorrelationData[];
 }
 
-export interface TypeaheadOutput {
-  context?: string;
-  refresher?: Promise<{}>;
-  suggestions: CompletionItemGroup[];
+export interface ExploreUpdateState {
+  datasource: boolean;
+  queries: boolean;
+  range: boolean;
+  mode: boolean;
 }
 
-export interface QueryFix {
-  type: string;
-  label: string;
-  action?: QueryFixAction;
-}
-
-export interface QueryFixAction {
-  type: string;
-  query?: string;
-  preventSubmit?: boolean;
-}
-
-export interface QueryHint {
-  type: string;
-  label: string;
-  fix?: QueryFix;
-}
-
-export interface QueryHintGetter {
-  (query: DataQuery, results: any[], ...rest: any): QueryHint[];
+export interface QueryOptions {
+  minInterval?: string;
+  maxDataPoints?: number;
+  liveStreaming?: boolean;
 }
 
 export interface QueryTransaction {
   id: string;
   done: boolean;
-  error?: string | JSX.Element;
-  hints?: QueryHint[];
-  latency: number;
-  options: any;
-  query: DataQuery;
-  result?: any; // Table model / Timeseries[] / Logs
-  resultType: ResultType;
-  rowIndex: number;
+  request: DataQueryRequest;
+  queries: DataQuery[];
   scanning?: boolean;
 }
 
-export interface TextMatch {
-  text: string;
-  start: number;
-  length: number;
-  end: number;
+export type RichHistoryQuery<T extends DataQuery = DataQuery> = {
+  id: string;
+  createdAt: number;
+  datasourceUid: string;
+  datasourceName: string;
+  starred: boolean;
+  comment: string;
+  queries: T[];
+};
+
+export interface ExplorePanelData extends PanelData {
+  graphFrames: DataFrame[];
+  tableFrames: DataFrame[];
+  logsFrames: DataFrame[];
+  traceFrames: DataFrame[];
+  customFrames: DataFrame[];
+  nodeGraphFrames: DataFrame[];
+  rawPrometheusFrames: DataFrame[];
+  flameGraphFrames: DataFrame[];
+  graphResult: DataFrame[] | null;
+  tableResult: DataFrame[] | null;
+  logsResult: LogsModel | null;
+  rawPrometheusResult: DataFrame | null;
 }
 
-export interface ExploreState {
-  StartPage?: any;
-  datasource: any;
-  datasourceError: any;
-  datasourceLoading: boolean | null;
-  datasourceMissing: boolean;
-  exploreDatasources: DataSourceSelectItem[];
-  graphInterval: number; // in ms
-  graphResult?: any[];
-  history: HistoryItem[];
-  initialDatasource?: string;
-  initialQueries: DataQuery[];
-  logsHighlighterExpressions?: string[];
-  logsResult?: LogsModel;
-  queryTransactions: QueryTransaction[];
-  range: RawTimeRange;
-  scanning?: boolean;
-  scanRange?: RawTimeRange;
-  showingGraph: boolean;
-  showingLogs: boolean;
-  showingStartPage?: boolean;
-  showingTable: boolean;
-  supportsGraph: boolean | null;
-  supportsLogs: boolean | null;
-  supportsTable: boolean | null;
-  tableResult?: TableModel;
+export enum TABLE_RESULTS_STYLE {
+  table = 'table',
+  raw = 'raw',
+}
+export const TABLE_RESULTS_STYLES = [TABLE_RESULTS_STYLE.table, TABLE_RESULTS_STYLE.raw];
+export type TableResultsStyle = (typeof TABLE_RESULTS_STYLES)[number];
+
+export interface SupplementaryQuery {
+  enabled: boolean;
+  dataProvider?: Observable<DataQueryResponse>;
+  dataSubscription?: SubscriptionLike;
+  data?: DataQueryResponse;
 }
 
-export interface ExploreUrlState {
-  datasource: string;
-  queries: any[]; // Should be a DataQuery, but we're going to strip refIds, so typing makes less sense
-  range: RawTimeRange;
-}
-
-export type ResultType = 'Graph' | 'Logs' | 'Table';
+export type SupplementaryQueries = {
+  [key in SupplementaryQueryType]: SupplementaryQuery;
+};

@@ -1,47 +1,79 @@
-import { getBackendSrv } from 'app/core/services/backend_srv';
-import { AlertRuleDTO, StoreState } from 'app/types';
-import { ThunkAction } from 'redux-thunk';
+import { getBackendSrv, isFetchError, locationService } from '@grafana/runtime';
+import { notifyApp } from 'app/core/actions';
+import { createErrorNotification, createSuccessNotification } from 'app/core/copy/appNotification';
+import { AlertRuleDTO, NotifierDTO, ThunkResult } from 'app/types';
 
-export enum ActionTypes {
-  LoadAlertRules = 'LOAD_ALERT_RULES',
-  SetSearchQuery = 'SET_ALERT_SEARCH_QUERY',
-}
-
-export interface LoadAlertRulesAction {
-  type: ActionTypes.LoadAlertRules;
-  payload: AlertRuleDTO[];
-}
-
-export interface SetSearchQueryAction {
-  type: ActionTypes.SetSearchQuery;
-  payload: string;
-}
-
-export const loadAlertRules = (rules: AlertRuleDTO[]): LoadAlertRulesAction => ({
-  type: ActionTypes.LoadAlertRules,
-  payload: rules,
-});
-
-export const setSearchQuery = (query: string): SetSearchQueryAction => ({
-  type: ActionTypes.SetSearchQuery,
-  payload: query,
-});
-
-export type Action = LoadAlertRulesAction | SetSearchQueryAction;
-
-type ThunkResult<R> = ThunkAction<R, StoreState, undefined, Action>;
+import { loadAlertRules, loadedAlertRules, notificationChannelLoaded, setNotificationChannels } from './reducers';
 
 export function getAlertRulesAsync(options: { state: string }): ThunkResult<void> {
-  return async dispatch => {
-    const rules = await getBackendSrv().get('/api/alerts', options);
-    dispatch(loadAlertRules(rules));
+  return async (dispatch) => {
+    dispatch(loadAlertRules());
+    const rules: AlertRuleDTO[] = await getBackendSrv().get('/api/alerts', options);
+    dispatch(loadedAlertRules(rules));
   };
 }
 
 export function togglePauseAlertRule(id: number, options: { paused: boolean }): ThunkResult<void> {
-  return async (dispatch, getState) => {
+  return async (dispatch) => {
     await getBackendSrv().post(`/api/alerts/${id}/pause`, options);
-    const stateFilter = getState().location.query.state || 'all';
+    const stateFilter = locationService.getSearchObject().state || 'all';
     dispatch(getAlertRulesAsync({ state: stateFilter.toString() }));
+  };
+}
+
+export function createNotificationChannel(data: any): ThunkResult<Promise<void>> {
+  return async (dispatch) => {
+    try {
+      await getBackendSrv().post(`/api/alert-notifications`, data);
+      dispatch(notifyApp(createSuccessNotification('Notification created')));
+      locationService.push('/alerting-legacy/notifications');
+    } catch (error) {
+      if (isFetchError(error)) {
+        dispatch(notifyApp(createErrorNotification(error.data.error)));
+      }
+    }
+  };
+}
+
+export function updateNotificationChannel(data: any): ThunkResult<void> {
+  return async (dispatch) => {
+    try {
+      await getBackendSrv().put(`/api/alert-notifications/${data.id}`, data);
+      dispatch(notifyApp(createSuccessNotification('Notification updated')));
+    } catch (error) {
+      if (isFetchError(error)) {
+        dispatch(notifyApp(createErrorNotification(error.data.error)));
+      }
+    }
+  };
+}
+
+export function testNotificationChannel(data: any): ThunkResult<void> {
+  return async (dispatch, getState) => {
+    const channel = getState().notificationChannel.notificationChannel;
+    await getBackendSrv().post('/api/alert-notifications/test', { id: channel.id, ...data });
+  };
+}
+
+export function loadNotificationTypes(): ThunkResult<void> {
+  return async (dispatch) => {
+    const alertNotifiers: NotifierDTO[] = await getBackendSrv().get(`/api/alert-notifiers-legacy`);
+
+    const notificationTypes = alertNotifiers.sort((o1, o2) => {
+      if (o1.name > o2.name) {
+        return 1;
+      }
+      return -1;
+    });
+
+    dispatch(setNotificationChannels(notificationTypes));
+  };
+}
+
+export function loadNotificationChannel(id: number): ThunkResult<void> {
+  return async (dispatch) => {
+    await dispatch(loadNotificationTypes());
+    const notificationChannel = await getBackendSrv().get(`/api/alert-notifications/${id}`);
+    dispatch(notificationChannelLoaded(notificationChannel));
   };
 }

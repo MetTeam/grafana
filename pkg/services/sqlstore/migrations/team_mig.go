@@ -24,6 +24,19 @@ func addTeamMigrations(mg *Migrator) {
 	mg.AddMigration("add index team.org_id", NewAddIndexMigration(teamV1, teamV1.Indices[0]))
 	mg.AddMigration("add unique index team_org_id_name", NewAddIndexMigration(teamV1, teamV1.Indices[1]))
 
+	mg.AddMigration("Add column uid in team", NewAddColumnMigration(teamV1, &Column{
+		Name: "uid", Type: DB_NVarchar, Length: 40, Nullable: true,
+	}))
+
+	mg.AddMigration("Update uid column values in team", NewRawSQLMigration("").
+		SQLite("UPDATE team SET uid=printf('t%09d',id) WHERE uid IS NULL;").
+		Postgres("UPDATE team SET uid='t' || lpad('' || id::text,9,'0') WHERE uid IS NULL;").
+		Mysql("UPDATE team SET uid=concat('t',lpad(id,9,'0')) WHERE uid IS NULL;"))
+
+	mg.AddMigration("Add unique index team_org_id_uid", NewAddIndexMigration(teamV1, &Index{
+		Cols: []string{"org_id", "uid"}, Type: UniqueIndex,
+	}))
+
 	teamMemberV1 := Table{
 		Name: "team_member",
 		Columns: []*Column{
@@ -37,6 +50,7 @@ func addTeamMigrations(mg *Migrator) {
 		Indices: []*Index{
 			{Cols: []string{"org_id"}},
 			{Cols: []string{"org_id", "team_id", "user_id"}, Type: UniqueIndex},
+			{Cols: []string{"team_id"}},
 		},
 	}
 
@@ -45,6 +59,7 @@ func addTeamMigrations(mg *Migrator) {
 	//-------  indexes ------------------
 	mg.AddMigration("add index team_member.org_id", NewAddIndexMigration(teamMemberV1, teamMemberV1.Indices[0]))
 	mg.AddMigration("add unique index team_member_org_id_team_id_user_id", NewAddIndexMigration(teamMemberV1, teamMemberV1.Indices[1]))
+	mg.AddMigration("add index team_member.team_id", NewAddIndexMigration(teamMemberV1, teamMemberV1.Indices[2]))
 
 	// add column email
 	mg.AddMigration("Add column email to team table", NewAddColumnMigration(teamV1, &Column{
@@ -53,5 +68,9 @@ func addTeamMigrations(mg *Migrator) {
 
 	mg.AddMigration("Add column external to team_member table", NewAddColumnMigration(teamMemberV1, &Column{
 		Name: "external", Type: DB_Bool, Nullable: true,
+	}))
+
+	mg.AddMigration("Add column permission to team_member table", NewAddColumnMigration(teamMemberV1, &Column{
+		Name: "permission", Type: DB_SmallInt, Nullable: true,
 	}))
 }

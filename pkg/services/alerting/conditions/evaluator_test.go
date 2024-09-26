@@ -3,61 +3,60 @@ package conditions
 import (
 	"testing"
 
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 
 	"github.com/grafana/grafana/pkg/components/null"
 	"github.com/grafana/grafana/pkg/components/simplejson"
 )
 
-func evalutorScenario(json string, reducedValue float64, datapoints ...float64) bool {
+func evaluatorScenario(t *testing.T, json string, reducedValue float64, datapoints ...float64) bool {
 	jsonModel, err := simplejson.NewJson([]byte(json))
-	So(err, ShouldBeNil)
+	require.NoError(t, err)
 
 	evaluator, err := NewAlertEvaluator(jsonModel)
-	So(err, ShouldBeNil)
+	require.NoError(t, err)
 
 	return evaluator.Eval(null.FloatFrom(reducedValue))
 }
 
-func TestEvalutors(t *testing.T) {
-	Convey("greater then", t, func() {
-		So(evalutorScenario(`{"type": "gt", "params": [1] }`, 3), ShouldBeTrue)
-		So(evalutorScenario(`{"type": "gt", "params": [3] }`, 1), ShouldBeFalse)
+func TestEvaluators(t *testing.T) {
+	t.Run("greater then", func(t *testing.T) {
+		require.True(t, evaluatorScenario(t, `{"type": "gt", "params": [1] }`, 3))
+		require.False(t, evaluatorScenario(t, `{"type": "gt", "params": [3] }`, 1))
 	})
 
-	Convey("less then", t, func() {
-		So(evalutorScenario(`{"type": "lt", "params": [1] }`, 3), ShouldBeFalse)
-		So(evalutorScenario(`{"type": "lt", "params": [3] }`, 1), ShouldBeTrue)
+	t.Run("less then", func(t *testing.T) {
+		require.False(t, evaluatorScenario(t, `{"type": "lt", "params": [1] }`, 3))
+		require.True(t, evaluatorScenario(t, `{"type": "lt", "params": [3] }`, 1))
 	})
 
-	Convey("within_range", t, func() {
-		So(evalutorScenario(`{"type": "within_range", "params": [1, 100] }`, 3), ShouldBeTrue)
-		So(evalutorScenario(`{"type": "within_range", "params": [1, 100] }`, 300), ShouldBeFalse)
-		So(evalutorScenario(`{"type": "within_range", "params": [100, 1] }`, 3), ShouldBeTrue)
-		So(evalutorScenario(`{"type": "within_range", "params": [100, 1] }`, 300), ShouldBeFalse)
+	t.Run("within_range", func(t *testing.T) {
+		require.True(t, evaluatorScenario(t, `{"type": "within_range", "params": [1, 100] }`, 3))
+		require.False(t, evaluatorScenario(t, `{"type": "within_range", "params": [1, 100] }`, 300))
+		require.True(t, evaluatorScenario(t, `{"type": "within_range", "params": [100, 1] }`, 3))
+		require.False(t, evaluatorScenario(t, `{"type": "within_range", "params": [100, 1] }`, 300))
 	})
 
-	Convey("outside_range", t, func() {
-		So(evalutorScenario(`{"type": "outside_range", "params": [1, 100] }`, 1000), ShouldBeTrue)
-		So(evalutorScenario(`{"type": "outside_range", "params": [1, 100] }`, 50), ShouldBeFalse)
-		So(evalutorScenario(`{"type": "outside_range", "params": [100, 1] }`, 1000), ShouldBeTrue)
-		So(evalutorScenario(`{"type": "outside_range", "params": [100, 1] }`, 50), ShouldBeFalse)
+	t.Run("outside_range", func(t *testing.T) {
+		require.True(t, evaluatorScenario(t, `{"type": "outside_range", "params": [1, 100] }`, 1000))
+		require.False(t, evaluatorScenario(t, `{"type": "outside_range", "params": [1, 100] }`, 50))
+		require.True(t, evaluatorScenario(t, `{"type": "outside_range", "params": [100, 1] }`, 1000))
+		require.False(t, evaluatorScenario(t, `{"type": "outside_range", "params": [100, 1] }`, 50))
 	})
 
-	Convey("no_value", t, func() {
-		Convey("should be false if serie have values", func() {
-			So(evalutorScenario(`{"type": "no_value", "params": [] }`, 50), ShouldBeFalse)
+	t.Run("no_value", func(t *testing.T) {
+		t.Run("should be false if series have values", func(t *testing.T) {
+			require.False(t, evaluatorScenario(t, `{"type": "no_value", "params": [] }`, 50))
 		})
 
-		Convey("should be true when the serie have no value", func() {
+		t.Run("should be true when the series have no value", func(t *testing.T) {
 			jsonModel, err := simplejson.NewJson([]byte(`{"type": "no_value", "params": [] }`))
-			So(err, ShouldBeNil)
+			require.NoError(t, err)
 
 			evaluator, err := NewAlertEvaluator(jsonModel)
-			So(err, ShouldBeNil)
+			require.NoError(t, err)
 
-			So(evaluator.Eval(null.FloatFromPtr(nil)), ShouldBeTrue)
-
+			require.True(t, evaluator.Eval(null.FloatFromPtr(nil)))
 		})
 	})
 }

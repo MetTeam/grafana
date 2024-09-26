@@ -1,39 +1,52 @@
-import React, { Component } from 'react';
-import { AppNotification } from 'app/types';
+import { css } from '@emotion/css';
+import React from 'react';
+import { useEffectOnce } from 'react-use';
+
+import { GrafanaTheme2 } from '@grafana/data';
+import { Alert, useStyles2 } from '@grafana/ui';
+import { AppNotification, timeoutMap } from 'app/types';
 
 interface Props {
   appNotification: AppNotification;
-  onClearNotification: (id) => void;
+  onClearNotification: (id: string) => void;
 }
 
-export default class AppNotificationItem extends Component<Props> {
-  shouldComponentUpdate(nextProps) {
-    return this.props.appNotification.id !== nextProps.appNotification.id;
-  }
+export default function AppNotificationItem({ appNotification, onClearNotification }: Props) {
+  const styles = useStyles2(getStyles);
 
-  componentDidMount() {
-    const { appNotification, onClearNotification } = this.props;
+  useEffectOnce(() => {
     setTimeout(() => {
       onClearNotification(appNotification.id);
-    }, appNotification.timeout);
-  }
+    }, timeoutMap[appNotification.severity]);
+  });
 
-  render() {
-    const { appNotification, onClearNotification } = this.props;
+  const hasBody = appNotification.component || appNotification.text || appNotification.traceId;
 
-    return (
-      <div className={`alert-${appNotification.severity} alert`}>
-        <div className="alert-icon">
-          <i className={appNotification.icon} />
+  return (
+    <Alert
+      severity={appNotification.severity}
+      title={appNotification.title}
+      onRemove={() => onClearNotification(appNotification.id)}
+      elevated
+    >
+      {hasBody && (
+        <div className={styles.wrapper}>
+          <span>{appNotification.component || appNotification.text}</span>
+          {appNotification.traceId && <span className={styles.trace}>Trace ID: {appNotification.traceId}</span>}
         </div>
-        <div className="alert-body">
-          <div className="alert-title">{appNotification.title}</div>
-          <div className="alert-text">{appNotification.text}</div>
-        </div>
-        <button type="button" className="alert-close" onClick={() => onClearNotification(appNotification.id)}>
-          <i className="fa fa fa-remove" />
-        </button>
-      </div>
-    );
-  }
+      )}
+    </Alert>
+  );
+}
+
+function getStyles(theme: GrafanaTheme2) {
+  return {
+    wrapper: css({
+      display: 'flex',
+      flexDirection: 'column',
+    }),
+    trace: css({
+      fontSize: theme.typography.pxToRem(10),
+    }),
+  };
 }

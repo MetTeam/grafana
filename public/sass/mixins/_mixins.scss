@@ -1,3 +1,5 @@
+@use 'sass:color';
+
 @mixin clearfix() {
   &::after {
     content: '';
@@ -44,14 +46,8 @@
 
 // Placeholder text
 // -------------------------
-@mixin placeholder($color: $placeholderText) {
-  &:-moz-placeholder {
-    color: $color;
-  }
-  &:-ms-input-placeholder {
-    color: $color;
-  }
-  &::-webkit-input-placeholder {
+@mixin placeholder($color: $input-color-placeholder) {
+  &::placeholder {
     color: $color;
   }
 }
@@ -79,10 +75,6 @@
 // FONTS
 // --------------------------------------------------
 
-@mixin font-family-serif() {
-  font-family: $font-family-serif;
-}
-
 @mixin font-family-sans-serif() {
   font-family: $font-family-sans-serif;
 }
@@ -95,11 +87,6 @@
   font-size: $size;
   font-weight: $weight;
   line-height: $lineHeight;
-}
-
-@mixin font-serif($size: $font-size-base, $weight: normal, $lineHeight: $line-height-base) {
-  @include font-family-serif();
-  @include font-shorthand($size, $weight, $lineHeight);
 }
 
 @mixin font-sans-serif($size: $font-size-base, $weight: normal, $lineHeight: $line-height-base) {
@@ -260,7 +247,7 @@
 
 // Opacity
 @mixin opacity($opacity) {
-  opacity: $opacity / 100;
+  opacity: calc($opacity / 100);
 }
 
 // BACKGROUNDS
@@ -269,16 +256,16 @@
 // Add an alphatransparency value to any background or border color (via Elyse Holladay)
 #translucent {
   @mixin background($color: $white, $alpha: 1) {
-    background-color: hsla(hue($color), saturation($color), lightness($color), $alpha);
+    background-color: hsla(color.hue($color), color.saturation($color), color.lightness($color), $alpha);
   }
   @mixin border($color: $white, $alpha: 1) {
-    border-color: hsla(hue($color), saturation($color), lightness($color), $alpha);
+    border-color: hsla(color.hue($color), color.saturation($color), color.lightness($color), $alpha);
     @include background-clip(padding-box);
   }
 }
 
 // Gradient Bar Colors for buttons and alerts
-@mixin gradientBar($primaryColor, $secondaryColor, $text-color: #fff, $textShadow: 0 -1px 0 rgba(0,0,0,0.25)) {
+@mixin gradientBar($primaryColor, $secondaryColor, $text-color: #fff, $textShadow: 0 -1px 0 rgba(0, 0, 0, 0.25)) {
   color: $text-color;
   text-shadow: $textShadow;
   @include gradient-vertical($primaryColor, $secondaryColor);
@@ -293,7 +280,7 @@
 }
 
 @mixin gradient-vertical($startColor: #555, $endColor: #333) {
-  background-color: mix($startColor, $endColor, 60%);
+  background-color: color.mix($startColor, $endColor, 60%);
   background-image: linear-gradient(to bottom, $startColor, $endColor); // Standard, IE10
   background-repeat: repeat-x;
 }
@@ -305,13 +292,13 @@
 }
 
 @mixin gradient-horizontal-three-colors($startColor: #00b3ee, $midColor: #7a43b6, $colorStop: 50%, $endColor: #c3325f) {
-  background-color: mix($midColor, $endColor, 80%);
+  background-color: color.mix($midColor, $endColor, 80%);
   background-image: linear-gradient(to right, $startColor, $midColor $colorStop, $endColor);
   background-repeat: no-repeat;
 }
 
 @mixin gradient-vertical-three-colors($startColor: #00b3ee, $midColor: #7a43b6, $colorStop: 50%, $endColor: #c3325f) {
-  background-color: mix($midColor, $endColor, 80%);
+  background-color: color.mix($midColor, $endColor, 80%);
   background-image: linear-gradient($startColor, $midColor $colorStop, $endColor);
   background-repeat: no-repeat;
 }
@@ -344,8 +331,7 @@
 }
 
 @mixin left-brand-border-gradient() {
-  border: none;
-  border-image: linear-gradient(rgba(255, 213, 0, 1) 0%, rgba(255, 68, 0, 1) 99%, rgba(255, 68, 0, 1) 100%);
+  border-image: $brand-gradient-vertical;
   border-image-slice: 1;
   border-style: solid;
   border-top: 0;
@@ -355,7 +341,7 @@
 }
 
 @mixin brand-bottom-border() {
-  border-image: $brand-gradient;
+  border-image: $brand-gradient-horizontal;
   border-image-slice: 1;
   border-style: solid;
   border-top: 0;
@@ -370,10 +356,17 @@
   padding: 7px;
   background: $list-item-bg;
   box-shadow: $list-item-shadow;
-  color: $list-item-link-color;
+  border-radius: $border-radius;
 
   &:hover {
     background: $list-item-hover-bg;
-    color: $list-item-link-color;
+  }
+}
+
+@function lightOrDark($lightColor, $darkColor) {
+  @if (lightness($text-color) < 50) {
+    @return $lightColor;
+  } @else {
+    @return $darkColor;
   }
 }

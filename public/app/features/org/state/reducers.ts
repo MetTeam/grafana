@@ -1,21 +1,31 @@
-import { Organization, OrganizationState } from 'app/types';
-import { Action, ActionTypes } from './actions';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
-const initialState: OrganizationState = {
+import { Organization, OrganizationState, UserOrg } from 'app/types';
+
+export const initialState: OrganizationState = {
   organization: {} as Organization,
+  userOrgs: [],
 };
 
-const organizationReducer = (state = initialState, action: Action): OrganizationState => {
-  switch (action.type) {
-    case ActionTypes.LoadOrganization:
+const organizationSlice = createSlice({
+  name: 'organization',
+  initialState,
+  reducers: {
+    organizationLoaded: (state, action: PayloadAction<Organization>): OrganizationState => {
       return { ...state, organization: action.payload };
-
-    case ActionTypes.SetOrganizationName:
+    },
+    setOrganizationName: (state, action: PayloadAction<string>): OrganizationState => {
       return { ...state, organization: { ...state.organization, name: action.payload } };
-  }
+    },
+    userOrganizationsLoaded: (state, action: PayloadAction<UserOrg[]>): OrganizationState => {
+      return { ...state, userOrgs: action.payload };
+    },
+  },
+});
 
-  return state;
-};
+export const { setOrganizationName, organizationLoaded, userOrganizationsLoaded } = organizationSlice.actions;
+
+export const organizationReducer = organizationSlice.reducer;
 
 export default {
   organization: organizationReducer,

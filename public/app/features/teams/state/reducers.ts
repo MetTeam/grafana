@@ -1,42 +1,86 @@
-import { Team, TeamGroup, TeamMember, TeamsState, TeamState } from 'app/types';
-import { Action, ActionTypes } from './actions';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
-export const initialTeamsState: TeamsState = { teams: [], searchQuery: '', hasFetched: false };
+import { Team, TeamGroup, TeamMember, TeamsState, TeamState } from 'app/types';
+
+export const initialTeamsState: TeamsState = {
+  teams: [],
+  page: 1,
+  query: '',
+  perPage: 30,
+  totalPages: 0,
+  noTeams: false,
+  hasFetched: false,
+};
+
+type TeamsFetched = {
+  teams: Team[];
+  page: number;
+  perPage: number;
+  noTeams: boolean;
+  totalCount: number;
+};
+
+const teamsSlice = createSlice({
+  name: 'teams',
+  initialState: initialTeamsState,
+  reducers: {
+    teamsLoaded: (state, action: PayloadAction<TeamsFetched>): TeamsState => {
+      const { totalCount, perPage, ...rest } = action.payload;
+      const totalPages = Math.ceil(totalCount / perPage);
+      return { ...state, ...rest, totalPages, perPage, hasFetched: true };
+    },
+    queryChanged: (state, action: PayloadAction<string>): TeamsState => {
+      return { ...state, page: 1, query: action.payload };
+    },
+    pageChanged: (state, action: PayloadAction<number>): TeamsState => {
+      return { ...state, page: action.payload };
+    },
+    sortChanged: (state, action: PayloadAction<TeamsState['sort']>): TeamsState => {
+      return { ...state, sort: action.payload, page: 1 };
+    },
+    rolesFetchBegin: (state) => {
+      return { ...state, rolesLoading: true };
+    },
+    rolesFetchEnd: (state) => {
+      return { ...state, rolesLoading: false };
+    },
+  },
+});
+
+export const { teamsLoaded, queryChanged, pageChanged, sortChanged, rolesFetchBegin, rolesFetchEnd } =
+  teamsSlice.actions;
+
+export const teamsReducer = teamsSlice.reducer;
+
 export const initialTeamState: TeamState = {
   team: {} as Team,
-  members: [] as TeamMember[],
-  groups: [] as TeamGroup[],
+  members: [],
+  groups: [],
   searchMemberQuery: '',
 };
 
-export const teamsReducer = (state = initialTeamsState, action: Action): TeamsState => {
-  switch (action.type) {
-    case ActionTypes.LoadTeams:
-      return { ...state, hasFetched: true, teams: action.payload };
-
-    case ActionTypes.SetSearchQuery:
-      return { ...state, searchQuery: action.payload };
-  }
-  return state;
-};
-
-export const teamReducer = (state = initialTeamState, action: Action): TeamState => {
-  switch (action.type) {
-    case ActionTypes.LoadTeam:
+const teamSlice = createSlice({
+  name: 'team',
+  initialState: initialTeamState,
+  reducers: {
+    teamLoaded: (state, action: PayloadAction<Team>): TeamState => {
       return { ...state, team: action.payload };
-
-    case ActionTypes.LoadTeamMembers:
+    },
+    teamMembersLoaded: (state, action: PayloadAction<TeamMember[]>): TeamState => {
       return { ...state, members: action.payload };
-
-    case ActionTypes.SetSearchMemberQuery:
+    },
+    setSearchMemberQuery: (state, action: PayloadAction<string>): TeamState => {
       return { ...state, searchMemberQuery: action.payload };
-
-    case ActionTypes.LoadTeamGroups:
+    },
+    teamGroupsLoaded: (state, action: PayloadAction<TeamGroup[]>): TeamState => {
       return { ...state, groups: action.payload };
-  }
+    },
+  },
+});
 
-  return state;
-};
+export const { teamLoaded, teamGroupsLoaded, teamMembersLoaded, setSearchMemberQuery } = teamSlice.actions;
+
+export const teamReducer = teamSlice.reducer;
 
 export default {
   teams: teamsReducer,

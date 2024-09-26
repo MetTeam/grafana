@@ -1,100 +1,96 @@
-import React from 'react';
-import { connect } from 'react-redux';
+import React, { useState } from 'react';
+import { connect, ConnectedProps } from 'react-redux';
 
-import { Label } from 'app/core/components/Label/Label';
+import { Input, Field, Form, Button, FieldSet, VerticalGroup } from '@grafana/ui';
+import { TeamRolePicker } from 'app/core/components/RolePicker/TeamRolePicker';
+import { updateTeamRoles } from 'app/core/components/RolePicker/api';
+import { useRoleOptions } from 'app/core/components/RolePicker/hooks';
 import { SharedPreferences } from 'app/core/components/SharedPreferences/SharedPreferences';
+import { contextSrv } from 'app/core/services/context_srv';
+import { AccessControlAction, Role, Team } from 'app/types';
+
 import { updateTeam } from './state/actions';
-import { getRouteParamsId } from 'app/core/selectors/location';
-import { getTeam } from './state/selectors';
-import { Team } from 'app/types';
-
-export interface Props {
-  team: Team;
-  updateTeam: typeof updateTeam;
-}
-
-interface State {
-  name: string;
-  email: string;
-}
-
-export class TeamSettings extends React.Component<Props, State> {
-  constructor(props) {
-    super(props);
-
-    this.state = {
-      name: props.team.name,
-      email: props.team.email,
-    };
-  }
-
-  onChangeName = event => {
-    this.setState({ name: event.target.value });
-  };
-
-  onChangeEmail = event => {
-    this.setState({ email: event.target.value });
-  };
-
-  onUpdate = event => {
-    const { name, email } = this.state;
-    event.preventDefault();
-    this.props.updateTeam(name, email);
-  };
-
-  render() {
-    const { team } = this.props;
-    const { name, email } = this.state;
-
-    return (
-      <div>
-        <h3 className="page-sub-heading">Team Settings</h3>
-        <form name="teamDetailsForm" className="gf-form-group" onSubmit={this.onUpdate}>
-          <div className="gf-form max-width-30">
-            <Label>Name</Label>
-            <input
-              type="text"
-              required
-              value={name}
-              className="gf-form-input max-width-22"
-              onChange={this.onChangeName}
-            />
-          </div>
-          <div className="gf-form max-width-30">
-            <Label tooltip="This is optional and is primarily used to set the team profile avatar (via gravatar service)">
-              Email
-            </Label>
-            <input
-              type="email"
-              className="gf-form-input max-width-22"
-              value={email}
-              placeholder="team@email.com"
-              onChange={this.onChangeEmail}
-            />
-          </div>
-
-          <div className="gf-form-button-row">
-            <button type="submit" className="btn btn-success">
-              Update
-            </button>
-          </div>
-        </form>
-        <SharedPreferences resourceUri={`teams/${team.id}`} />
-      </div>
-    );
-  }
-}
-
-function mapStateToProps(state) {
-  const teamId = getRouteParamsId(state.location);
-
-  return {
-    team: getTeam(state.team, teamId),
-  };
-}
 
 const mapDispatchToProps = {
   updateTeam,
 };
 
-export default connect(mapStateToProps, mapDispatchToProps)(TeamSettings);
+const connector = connect(null, mapDispatchToProps);
+
+interface OwnProps {
+  team: Team;
+}
+export type Props = ConnectedProps<typeof connector> & OwnProps;
+
+export const TeamSettings = ({ team, updateTeam }: Props) => {
+  const canWriteTeamSettings = contextSrv.hasPermissionInMetadata(AccessControlAction.ActionTeamsWrite, team);
+  const currentOrgId = contextSrv.user.orgId;
+
+  const [{ roleOptions }] = useRoleOptions(currentOrgId);
+  const [pendingRoles, setPendingRoles] = useState<Role[]>([]);
+
+  const canUpdateRoles =
+    contextSrv.hasPermission(AccessControlAction.ActionTeamsRolesAdd) &&
+    contextSrv.hasPermission(AccessControlAction.ActionTeamsRolesRemove);
+
+  const canListRoles =
+    contextSrv.hasPermissionInMetadata(AccessControlAction.ActionTeamsRolesList, team) &&
+    contextSrv.hasPermission(AccessControlAction.ActionRolesList);
+
+  return (
+    <VerticalGroup spacing="lg">
+      <Form
+        defaultValues={{ ...team }}
+        onSubmit={async (formTeam: Team) => {
+          if (contextSrv.licensedAccessControlEnabled() && canUpdateRoles) {
+            await updateTeamRoles(pendingRoles, team.id);
+          }
+          updateTeam(formTeam.name, formTeam.email || '');
+        }}
+        disabled={!canWriteTeamSettings}
+      >
+        {({ register, errors }) => (
+          <FieldSet label="Team details">
+            <Field
+              label="Name"
+              disabled={!canWriteTeamSettings}
+              required
+              invalid={!!errors.name}
+              error="Name is required"
+            >
+              <Input {...register('name', { required: true })} id="name-input" />
+            </Field>
+
+            {contextSrv.licensedAccessControlEnabled() && canListRoles && (
+              <Field label="Role">
+                <TeamRolePicker
+                  teamId={team.id}
+                  roleOptions={roleOptions}
+                  disabled={!canUpdateRoles}
+                  apply={true}
+                  onApplyRoles={setPendingRoles}
+                  pendingRoles={pendingRoles}
+                  maxWidth="100%"
+                />
+              </Field>
+            )}
+
+            <Field
+              label="Email"
+              description="This is optional and is primarily used to set the team profile avatar (via gravatar service)."
+              disabled={!canWriteTeamSettings}
+            >
+              <Input {...register('email')} placeholder="team@email.com" type="email" id="email-input" />
+            </Field>
+            <Button type="submit" disabled={!canWriteTeamSettings}>
+              Update
+            </Button>
+          </FieldSet>
+        )}
+      </Form>
+      <SharedPreferences resourceUri={`teams/${team.id}`} disabled={!canWriteTeamSettings} preferenceType="team" />
+    </VerticalGroup>
+  );
+};
+
+export default connector(TeamSettings);

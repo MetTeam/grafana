@@ -1,16 +1,25 @@
 package dtos
 
 import (
-	m "github.com/grafana/grafana/pkg/models"
+	"github.com/grafana/grafana/pkg/services/dashboards/dashboardaccess"
+	"github.com/grafana/grafana/pkg/services/org"
 )
 
-type UpdateDashboardAclCommand struct {
-	Items []DashboardAclUpdateItem `json:"items"`
+// swagger:model
+type UpdateDashboardACLCommand struct {
+	Items []DashboardACLUpdateItem `json:"items"`
 }
 
-type DashboardAclUpdateItem struct {
-	UserId     int64            `json:"userId"`
-	TeamId     int64            `json:"teamId"`
-	Role       *m.RoleType      `json:"role,omitempty"`
-	Permission m.PermissionType `json:"permission"`
+// swagger:model
+type DashboardACLUpdateItem struct {
+	UserID int64         `json:"userId"`
+	TeamID int64         `json:"teamId"`
+	Role   *org.RoleType `json:"role,omitempty"`
+	// Permission level
+	// Description:
+	// * `1` - View
+	// * `2` - Edit
+	// * `4` - Admin
+	// Enum: 1,2,4
+	Permission dashboardaccess.PermissionType `json:"permission"`
 }

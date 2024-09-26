@@ -1,20 +1,16 @@
+import { render, screen } from '@testing-library/react';
 import React from 'react';
-import renderer from 'react-test-renderer';
+
 import { UserPicker } from './UserPicker';
 
-jest.mock('app/core/services/backend_srv', () => ({
-  getBackendSrv: () => {
-    return {
-      get: () => {
-        return Promise.resolve([]);
-      },
-    };
-  },
+jest.mock('@grafana/runtime', () => ({
+  getBackendSrv: () => ({ get: jest.fn().mockResolvedValue([]) }),
 }));
 
 describe('UserPicker', () => {
-  it('renders correctly', () => {
-    const tree = renderer.create(<UserPicker onSelected={() => {}} />).toJSON();
-    expect(tree).toMatchSnapshot();
+  it('renders correctly', async () => {
+    render(<UserPicker onSelected={() => {}} />);
+
+    expect(await screen.findByTestId('userPicker')).toBeInTheDocument();
   });
 });

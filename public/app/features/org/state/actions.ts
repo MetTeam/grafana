@@ -1,51 +1,64 @@
-import { ThunkAction } from 'redux-thunk';
-import { Organization, StoreState } from 'app/types';
-import { getBackendSrv } from 'app/core/services/backend_srv';
+import { getBackendSrv } from '@grafana/runtime';
+import { updateConfigurationSubtitle } from 'app/core/actions';
+import { ThunkResult } from 'app/types';
 
-type ThunkResult<R> = ThunkAction<R, StoreState, undefined, any>;
+import { organizationLoaded, userOrganizationsLoaded } from './reducers';
 
-export enum ActionTypes {
-  LoadOrganization = 'LOAD_ORGANIZATION',
-  SetOrganizationName = 'SET_ORGANIZATION_NAME',
-}
+type OrganizationDependencies = { getBackendSrv: typeof getBackendSrv };
 
-interface LoadOrganizationAction {
-  type: ActionTypes.LoadOrganization;
-  payload: Organization;
-}
-
-interface SetOrganizationNameAction {
-  type: ActionTypes.SetOrganizationName;
-  payload: string;
-}
-
-const organizationLoaded = (organization: Organization) => ({
-  type: ActionTypes.LoadOrganization,
-  payload: organization,
-});
-
-export const setOrganizationName = (orgName: string) => ({
-  type: ActionTypes.SetOrganizationName,
-  payload: orgName,
-});
-
-export type Action = LoadOrganizationAction | SetOrganizationNameAction;
-
-export function loadOrganization(): ThunkResult<void> {
-  return async dispatch => {
-    const organizationResponse = await getBackendSrv().get('/api/org');
+export function loadOrganization(
+  dependencies: OrganizationDependencies = { getBackendSrv: getBackendSrv }
+): ThunkResult<void> {
+  return async (dispatch) => {
+    const organizationResponse = await dependencies.getBackendSrv().get('/api/org');
     dispatch(organizationLoaded(organizationResponse));
 
     return organizationResponse;
   };
 }
 
-export function updateOrganization() {
+export function updateOrganization(
+  dependencies: OrganizationDependencies = { getBackendSrv: getBackendSrv }
+): ThunkResult<void> {
   return async (dispatch, getStore) => {
     const organization = getStore().organization.organization;
 
-    await getBackendSrv().put('/api/org', { name: organization.name });
+    await dependencies.getBackendSrv().put('/api/org', { name: organization.name });
 
-    dispatch(loadOrganization());
+    dispatch(updateConfigurationSubtitle(organization.name));
+    dispatch(loadOrganization(dependencies));
+  };
+}
+
+export function setUserOrganization(
+  orgId: number,
+  dependencies: OrganizationDependencies = { getBackendSrv: getBackendSrv }
+): ThunkResult<void> {
+  return async (dispatch) => {
+    const organizationResponse = await dependencies.getBackendSrv().post('/api/user/using/' + orgId);
+
+    dispatch(updateConfigurationSubtitle(organizationResponse.name));
+  };
+}
+
+export function createOrganization(
+  newOrg: { name: string },
+  dependencies: OrganizationDependencies = { getBackendSrv: getBackendSrv }
+): ThunkResult<void> {
+  return async (dispatch) => {
+    const result = await dependencies.getBackendSrv().post('/api/orgs/', newOrg);
+
+    dispatch(setUserOrganization(result.orgId));
+  };
+}
+
+export function getUserOrganizations(
+  dependencies: OrganizationDependencies = { getBackendSrv: getBackendSrv }
+): ThunkResult<any> {
+  return async (dispatch) => {
+    const result = await dependencies.getBackendSrv().get('/api/user/orgs');
+    dispatch(userOrganizationsLoaded(result));
+
+    return result;
   };
 }

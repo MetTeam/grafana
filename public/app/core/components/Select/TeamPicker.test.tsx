@@ -1,8 +1,9 @@
+import { render, screen } from '@testing-library/react';
 import React from 'react';
-import renderer from 'react-test-renderer';
+
 import { TeamPicker } from './TeamPicker';
 
-jest.mock('app/core/services/backend_srv', () => ({
+jest.mock('@grafana/runtime', () => ({
   getBackendSrv: () => {
     return {
       get: () => {
@@ -13,11 +14,11 @@ jest.mock('app/core/services/backend_srv', () => ({
 }));
 
 describe('TeamPicker', () => {
-  it('renders correctly', () => {
+  it('renders correctly', async () => {
     const props = {
       onSelected: () => {},
     };
-    const tree = renderer.create(<TeamPicker {...props} />).toJSON();
-    expect(tree).toMatchSnapshot();
+    render(<TeamPicker {...props} />);
+    expect(await screen.findByTestId('teamPicker')).toBeInTheDocument();
   });
 });

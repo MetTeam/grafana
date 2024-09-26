@@ -1,43 +1,33 @@
-import React, { SFC } from 'react';
+import React from 'react';
+
+import { Input, Field, FieldSet, Button, Form } from '@grafana/ui';
+import { contextSrv } from 'app/core/core';
+import { AccessControlAction } from 'app/types';
 
 export interface Props {
   orgName: string;
-  onSubmit: () => void;
-  onOrgNameChange: (orgName: string) => void;
+  onSubmit: (orgName: string) => void;
 }
 
-const OrgProfile: SFC<Props> = ({ onSubmit, onOrgNameChange, orgName }) => {
+interface FormDTO {
+  orgName: string;
+}
+
+const OrgProfile = ({ onSubmit, orgName }: Props) => {
+  const canWriteOrg = contextSrv.hasPermission(AccessControlAction.OrgsWrite);
+
   return (
-    <div>
-      <h3 className="page-sub-heading">Organization profile</h3>
-      <form
-        name="orgForm"
-        className="gf-form-group"
-        onSubmit={event => {
-          event.preventDefault();
-          onSubmit();
-        }}
-      >
-        <div className="gf-form-inline">
-          <div className="gf-form max-width-28">
-            <span className="gf-form-label">Organization name</span>
-            <input
-              className="gf-form-input"
-              type="text"
-              onChange={event => {
-                onOrgNameChange(event.target.value);
-              }}
-              value={orgName}
-            />
-          </div>
-        </div>
-        <div className="gf-form-button-row">
-          <button type="submit" className="btn btn-success">
-            Save
-          </button>
-        </div>
-      </form>
-    </div>
+    <Form defaultValues={{ orgName }} onSubmit={({ orgName }: FormDTO) => onSubmit(orgName)}>
+      {({ register }) => (
+        <FieldSet label="Organization profile" disabled={!canWriteOrg}>
+          <Field label="Organization name">
+            <Input id="org-name-input" type="text" {...register('orgName', { required: true })} />
+          </Field>
+
+          <Button type="submit">Update organization name</Button>
+        </FieldSet>
+      )}
+    </Form>
   );
 };
 

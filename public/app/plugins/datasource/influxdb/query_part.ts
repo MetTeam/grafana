@@ -1,8 +1,9 @@
-import _ from 'lodash';
-import { QueryPartDef, QueryPart, functionRenderer, suffixRenderer } from 'app/core/components/query_part/query_part';
+import { clone, map } from 'lodash';
 
-const index = [];
-const categories = {
+import { functionRenderer, QueryPart, QueryPartDef, suffixRenderer } from 'app/features/alerting/state/query_part';
+
+const index: any[] = [];
+const categories: any = {
   Aggregations: [],
   Selectors: [],
   Transformations: [],
@@ -12,7 +13,7 @@ const categories = {
   Fields: [],
 };
 
-function createPart(part): any {
+function createPart(part: any): any {
   const def = index[part.type];
   if (!def) {
     throw { message: 'Could not find query part ' + part.type };
@@ -26,20 +27,33 @@ function register(options: any) {
   options.category.push(index[options.type]);
 }
 
-const groupByTimeFunctions = [];
+const groupByTimeFunctions: any[] = [];
 
-function aliasRenderer(part, innerExpr) {
+function aliasRenderer(part: { params: string[] }, innerExpr: string) {
   return innerExpr + ' AS ' + '"' + part.params[0] + '"';
 }
 
-function fieldRenderer(part, innerExpr) {
-  if (part.params[0] === '*') {
+function fieldRenderer(part: { params: string[] }) {
+  const param = part.params[0];
+
+  if (param === '*') {
     return '*';
   }
-  return '"' + part.params[0] + '"';
+
+  let escapedParam = `"${param}"`;
+
+  if (param.endsWith('::tag')) {
+    escapedParam = `"${param.slice(0, -5)}"::tag`;
+  }
+
+  if (param.endsWith('::field')) {
+    escapedParam = `"${param.slice(0, -7)}"::field`;
+  }
+
+  return escapedParam;
 }
 
-function replaceAggregationAddStrategy(selectParts, partModel) {
+function replaceAggregationAddStrategy(selectParts: any[], partModel: { def: { type: string } }) {
   // look for existing aggregation
   for (let i = 0; i < selectParts.length; i++) {
     const part = selectParts[i];
@@ -78,7 +92,7 @@ function replaceAggregationAddStrategy(selectParts, partModel) {
   selectParts.splice(1, 0, partModel);
 }
 
-function addTransformationStrategy(selectParts, partModel) {
+function addTransformationStrategy(selectParts: any[], partModel: any) {
   let i;
   // look for index to add transformation
   for (i = 0; i < selectParts.length; i++) {
@@ -91,7 +105,7 @@ function addTransformationStrategy(selectParts, partModel) {
   selectParts.splice(i, 0, partModel);
 }
 
-function addMathStrategy(selectParts, partModel) {
+function addMathStrategy(selectParts: any[], partModel: any) {
   const partCount = selectParts.length;
   if (partCount > 0) {
     // if last is math, replace it
@@ -112,7 +126,7 @@ function addMathStrategy(selectParts, partModel) {
   selectParts.push(partModel);
 }
 
-function addAliasStrategy(selectParts, partModel) {
+function addAliasStrategy(selectParts: any[], partModel: any) {
   const partCount = selectParts.length;
   if (partCount > 0) {
     // if last is alias, replace it
@@ -124,10 +138,10 @@ function addAliasStrategy(selectParts, partModel) {
   selectParts.push(partModel);
 }
 
-function addFieldStrategy(selectParts, partModel, query) {
+function addFieldStrategy(selectParts: any, partModel: any, query: { selectModels: any[][] }) {
   // copy all parts
-  const parts = _.map(selectParts, (part: any) => {
-    return createPart({ type: part.def.type, params: _.clone(part.params) });
+  const parts = map(selectParts, (part) => {
+    return createPart({ type: part.def.type, params: clone(part.params) });
   });
 
   query.selectModels.push(parts);

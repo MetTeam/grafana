@@ -8,7 +8,7 @@ post_data=$(cat <<EOF
 {
   "accountName": "Torkeldegaard",
   "projectSlug": "grafana",
-  "branch": "master",
+  "branch": "main",
   "commitId": "${_commit}",
   "environmentVariables": {
     "buildType": "${_buildType}"
@@ -17,7 +17,7 @@ post_data=$(cat <<EOF
 EOF
 )
 
-echo ${post_data}
+echo "${post_data}"
 
 curl \
 --header "Accept: application/json" \

@@ -1,3 +1,5 @@
+@use 'sass:color';
+
 @mixin form-control-validation($color) {
   // Color the label and help text
   .text-help,
@@ -22,7 +24,7 @@
   .input-group-addon {
     color: $color;
     border-color: $color;
-    background-color: lighten($color, 40%);
+    background-color: color.adjust($color, $lightness: 40%);
   }
   // Optional feedback icon
   .form-control-feedback {
@@ -34,9 +36,6 @@
   &:focus {
     border-color: $input-border-focus;
     outline: none;
-    $shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075),
-      0 0 5px $input-box-shadow-focus;
-    @include box-shadow($shadow);
   }
 }
 

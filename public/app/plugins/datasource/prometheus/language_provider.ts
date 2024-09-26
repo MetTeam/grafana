@@ -1,348 +1,359 @@
-import _ from 'lodash';
-import moment from 'moment';
+import { once } from 'lodash';
+import Prism from 'prismjs';
 
 import {
-  CompletionItem,
-  CompletionItemGroup,
+  AbstractLabelMatcher,
+  AbstractLabelOperator,
+  AbstractQuery,
+  getDefaultTimeRange,
   LanguageProvider,
-  TypeaheadInput,
-  TypeaheadOutput,
-} from 'app/types/explore';
+  TimeRange,
+} from '@grafana/data';
+import { BackendSrvRequest } from '@grafana/runtime';
 
-import { parseSelector, processLabels } from './language_utils';
-import PromqlSyntax, { FUNCTIONS, RATE_RANGES } from './promql';
+import { Label } from './components/monaco-query-field/monaco-completion-provider/situation';
+import { PrometheusDatasource } from './datasource';
+import {
+  extractLabelMatchers,
+  fixSummariesMetadata,
+  processHistogramMetrics,
+  processLabels,
+  toPromLikeQuery,
+} from './language_utils';
+import PromqlSyntax from './promql';
+import { PrometheusCacheLevel, PromMetricsMetadata, PromQuery } from './types';
 
 const DEFAULT_KEYS = ['job', 'instance'];
 const EMPTY_SELECTOR = '{}';
-const HISTOGRAM_SELECTOR = '{le!=""}'; // Returns all timeseries for histograms
-const HISTORY_ITEM_COUNT = 5;
-const HISTORY_COUNT_CUTOFF = 1000 * 60 * 60 * 24; // 24h
+// Max number of items (metrics, labels, values) that we display as suggestions. Prevents from running out of memory.
+export const SUGGESTIONS_LIMIT = 10000;
 
-const wrapLabel = (label: string) => ({ label });
-
-const setFunctionKind = (suggestion: CompletionItem): CompletionItem => {
-  suggestion.kind = 'function';
-  return suggestion;
+const buildCacheHeaders = (durationInSeconds: number) => {
+  return {
+    headers: {
+      'X-Grafana-Cache': `private, max-age=${durationInSeconds}`,
+    },
+  };
 };
 
-export function addHistoryMetadata(item: CompletionItem, history: any[]): CompletionItem {
-  const cutoffTs = Date.now() - HISTORY_COUNT_CUTOFF;
-  const historyForItem = history.filter(h => h.ts > cutoffTs && h.query === item.label);
-  const count = historyForItem.length;
-  const recent = historyForItem[0];
-  let hint = `Queried ${count} times in the last 24h.`;
-  if (recent) {
-    const lastQueried = moment(recent.ts).fromNow();
-    hint = `${hint} Last queried ${lastQueried}.`;
+export function getMetadataString(metric: string, metadata: PromMetricsMetadata): string | undefined {
+  if (!metadata[metric]) {
+    return undefined;
   }
-  return {
-    ...item,
-    documentation: hint,
-  };
+  const { type, help } = metadata[metric];
+  return `${type.toUpperCase()}: ${help}`;
 }
 
-export default class PromQlLanguageProvider extends LanguageProvider {
-  histogramMetrics?: string[];
-  labelKeys?: { [index: string]: string[] }; // metric -> [labelKey,...]
-  labelValues?: { [index: string]: { [index: string]: string[] } }; // metric -> labelKey -> [labelValue,...]
-  metrics?: string[];
-  startTask: Promise<any>;
+export function getMetadataHelp(metric: string, metadata: PromMetricsMetadata): string | undefined {
+  if (!metadata[metric]) {
+    return undefined;
+  }
+  return metadata[metric].help;
+}
 
-  constructor(datasource: any, initialValues?: any) {
+export function getMetadataType(metric: string, metadata: PromMetricsMetadata): string | undefined {
+  if (!metadata[metric]) {
+    return undefined;
+  }
+  return metadata[metric].type;
+}
+
+const PREFIX_DELIMITER_REGEX =
+  /(="|!="|=~"|!~"|\{|\[|\(|\+|-|\/|\*|%|\^|\band\b|\bor\b|\bunless\b|==|>=|!=|<=|>|<|=|~|,)/;
+
+const secondsInDay = 86400;
+export default class PromQlLanguageProvider extends LanguageProvider {
+  histogramMetrics: string[];
+  timeRange: TimeRange;
+  metrics: string[];
+  metricsMetadata?: PromMetricsMetadata;
+  declare startTask: Promise<any>;
+  datasource: PrometheusDatasource;
+  labelKeys: string[] = [];
+  declare labelFetchTs: number;
+
+  constructor(datasource: PrometheusDatasource, initialValues?: Partial<PromQlLanguageProvider>) {
     super();
 
     this.datasource = datasource;
     this.histogramMetrics = [];
-    this.labelKeys = {};
-    this.labelValues = {};
+    this.timeRange = getDefaultTimeRange();
     this.metrics = [];
 
     Object.assign(this, initialValues);
   }
-  // Strip syntax chars
-  cleanText = s => s.replace(/[{}[\]="(),!~+\-*/^%]/g, '').trim();
 
-  getSyntax() {
+  getDefaultCacheHeaders() {
+    if (this.datasource.cacheLevel !== PrometheusCacheLevel.None) {
+      return buildCacheHeaders(this.datasource.getCacheDurationInMinutes() * 60);
+    }
+    return;
+  }
+
+  // Strip syntax chars so that typeahead suggestions can work on clean inputs
+  cleanText(s: string) {
+    const parts = s.split(PREFIX_DELIMITER_REGEX);
+    const last = parts.pop()!;
+    return last.trimLeft().replace(/"$/, '').replace(/^"/, '');
+  }
+
+  get syntax() {
     return PromqlSyntax;
   }
 
-  request = url => {
-    return this.datasource.metadataRequest(url);
-  };
-
-  start = () => {
-    if (!this.startTask) {
-      this.startTask = this.fetchMetricNames().then(() => [this.fetchHistogramMetrics()]);
-    }
-    return this.startTask;
-  };
-
-  // Keep this DOM-free for testing
-  provideCompletionItems({ prefix, wrapperClasses, text, value }: TypeaheadInput, context?: any): TypeaheadOutput {
-    // Local text properties
-    const empty = value.document.text.length === 0;
-    const selectedLines = value.document.getTextsAtRangeAsArray(value.selection);
-    const currentLine = selectedLines.length === 1 ? selectedLines[0] : null;
-    const nextCharacter = currentLine ? currentLine.text[value.selection.anchorOffset] : null;
-
-    // Syntax spans have 3 classes by default. More indicate a recognized token
-    const tokenRecognized = wrapperClasses.length > 3;
-    // Non-empty prefix, but not inside known token
-    const prefixUnrecognized = prefix && !tokenRecognized;
-    // Prevent suggestions in `function(|suffix)`
-    const noSuffix = !nextCharacter || nextCharacter === ')';
-    // Empty prefix is safe if it does not immediately folllow a complete expression and has no text after it
-    const safeEmptyPrefix = prefix === '' && !text.match(/^[\]})\s]+$/) && noSuffix;
-    // About to type next operand if preceded by binary operator
-    const isNextOperand = text.match(/[+\-*/^%]/);
-
-    // Determine candidates by CSS context
-    if (_.includes(wrapperClasses, 'context-range')) {
-      // Suggestions for metric[|]
-      return this.getRangeCompletionItems();
-    } else if (_.includes(wrapperClasses, 'context-labels')) {
-      // Suggestions for metric{|} and metric{foo=|}, as well as metric-independent label queries like {|}
-      return this.getLabelCompletionItems.apply(this, arguments);
-    } else if (_.includes(wrapperClasses, 'context-aggregation')) {
-      // Suggestions for sum(metric) by (|)
-      return this.getAggregationCompletionItems.apply(this, arguments);
-    } else if (empty) {
-      // Suggestions for empty query field
-      return this.getEmptyCompletionItems(context || {});
-    } else if (prefixUnrecognized || safeEmptyPrefix || isNextOperand) {
-      // Show term suggestions in a couple of scenarios
-      return this.getTermCompletionItems();
-    }
-
-    return {
-      suggestions: [],
-    };
-  }
-
-  getEmptyCompletionItems(context: any): TypeaheadOutput {
-    const { history } = context;
-    let suggestions: CompletionItemGroup[] = [];
-
-    if (history && history.length > 0) {
-      const historyItems = _.chain(history)
-        .map(h => h.query.expr)
-        .filter()
-        .uniq()
-        .take(HISTORY_ITEM_COUNT)
-        .map(wrapLabel)
-        .map(item => addHistoryMetadata(item, history))
-        .value();
-
-      suggestions.push({
-        prefixMatch: true,
-        skipSort: true,
-        label: 'History',
-        items: historyItems,
-      });
-    }
-
-    const termCompletionItems = this.getTermCompletionItems();
-    suggestions = [...suggestions, ...termCompletionItems.suggestions];
-
-    return { suggestions };
-  }
-
-  getTermCompletionItems(): TypeaheadOutput {
-    const { metrics } = this;
-    const suggestions: CompletionItemGroup[] = [];
-
-    suggestions.push({
-      prefixMatch: true,
-      label: 'Functions',
-      items: FUNCTIONS.map(setFunctionKind),
-    });
-
-    if (metrics && metrics.length > 0) {
-      suggestions.push({
-        label: 'Metrics',
-        items: metrics.map(wrapLabel),
-      });
-    }
-    return { suggestions };
-  }
-
-  getRangeCompletionItems(): TypeaheadOutput {
-    return {
-      context: 'context-range',
-      suggestions: [
-        {
-          label: 'Range vector',
-          items: [...RATE_RANGES],
-        },
-      ],
-    };
-  }
-
-  getAggregationCompletionItems({ value }: TypeaheadInput): TypeaheadOutput {
-    const refresher: Promise<any> = null;
-    const suggestions: CompletionItemGroup[] = [];
-
-    // Stitch all query lines together to support multi-line queries
-    let queryOffset;
-    const queryText = value.document.getBlocks().reduce((text, block) => {
-      const blockText = block.getText();
-      if (value.anchorBlock.key === block.key) {
-        // Newline characters are not accounted for but this is irrelevant
-        // for the purpose of extracting the selector string
-        queryOffset = value.anchorOffset + text.length;
-      }
-      text += blockText;
-      return text;
-    }, '');
-
-    // Try search for selector part on the left-hand side, such as `sum (m) by (l)`
-    const openParensAggregationIndex = queryText.lastIndexOf('(', queryOffset);
-    let openParensSelectorIndex = queryText.lastIndexOf('(', openParensAggregationIndex - 1);
-    let closeParensSelectorIndex = queryText.indexOf(')', openParensSelectorIndex);
-
-    // Try search for selector part of an alternate aggregation clause, such as `sum by (l) (m)`
-    if (openParensSelectorIndex === -1) {
-      const closeParensAggregationIndex = queryText.indexOf(')', queryOffset);
-      closeParensSelectorIndex = queryText.indexOf(')', closeParensAggregationIndex + 1);
-      openParensSelectorIndex = queryText.lastIndexOf('(', closeParensSelectorIndex);
-    }
-
-    const result = {
-      refresher,
-      suggestions,
-      context: 'context-aggregation',
-    };
-
-    // Suggestions are useless for alternative aggregation clauses without a selector in context
-    if (openParensSelectorIndex === -1) {
-      return result;
-    }
-
-    let selectorString = queryText.slice(openParensSelectorIndex + 1, closeParensSelectorIndex);
-
-    // Range vector syntax not accounted for by subsequent parse so discard it if present
-    selectorString = selectorString.replace(/\[[^\]]+\]$/, '');
-
-    const selector = parseSelector(selectorString, selectorString.length - 2).selector;
-
-    const labelKeys = this.labelKeys[selector];
-    if (labelKeys) {
-      suggestions.push({ label: 'Labels', items: labelKeys.map(wrapLabel) });
-    } else {
-      result.refresher = this.fetchSeriesLabels(selector);
-    }
-
-    return result;
-  }
-
-  getLabelCompletionItems({ text, wrapperClasses, labelKey, value }: TypeaheadInput): TypeaheadOutput {
-    let context: string;
-    let refresher: Promise<any> = null;
-    const suggestions: CompletionItemGroup[] = [];
-    const line = value.anchorBlock.getText();
-    const cursorOffset: number = value.anchorOffset;
-
-    // Get normalized selector
-    let selector;
-    let parsedSelector;
+  request = async (url: string, defaultValue: any, params = {}, options?: Partial<BackendSrvRequest>): Promise<any> => {
     try {
-      parsedSelector = parseSelector(line, cursorOffset);
-      selector = parsedSelector.selector;
-    } catch {
-      selector = EMPTY_SELECTOR;
-    }
-    const containsMetric = selector.indexOf('__name__=') > -1;
-    const existingKeys = parsedSelector ? parsedSelector.labelKeys : [];
-
-    if ((text && text.match(/^!?=~?/)) || _.includes(wrapperClasses, 'attr-value')) {
-      // Label values
-      if (labelKey && this.labelValues[selector] && this.labelValues[selector][labelKey]) {
-        const labelValues = this.labelValues[selector][labelKey];
-        context = 'context-label-values';
-        suggestions.push({
-          label: `Label values for "${labelKey}"`,
-          items: labelValues.map(wrapLabel),
-        });
-      }
-    } else {
-      // Label keys
-      const labelKeys = this.labelKeys[selector] || (containsMetric ? null : DEFAULT_KEYS);
-      if (labelKeys) {
-        const possibleKeys = _.difference(labelKeys, existingKeys);
-        if (possibleKeys.length > 0) {
-          context = 'context-labels';
-          suggestions.push({ label: `Labels`, items: possibleKeys.map(wrapLabel) });
-        }
-      }
-    }
-
-    // Query labels for selector
-    if (selector && !this.labelValues[selector]) {
-      if (selector === EMPTY_SELECTOR) {
-        // Query label values for default labels
-        refresher = Promise.all(DEFAULT_KEYS.map(key => this.fetchLabelValues(key)));
-      } else {
-        refresher = this.fetchSeriesLabels(selector, !containsMetric);
-      }
-    }
-
-    return { context, refresher, suggestions };
-  }
-
-  async fetchMetricNames() {
-    const url = '/api/v1/label/__name__/values';
-    try {
-      const res = await this.request(url);
-      const body = await (res.data || res.json());
-      this.metrics = body.data;
+      const res = await this.datasource.metadataRequest(url, params, options);
+      return res.data.data;
     } catch (error) {
       console.error(error);
     }
-  }
 
-  async fetchHistogramMetrics() {
-    await this.fetchSeriesLabels(HISTOGRAM_SELECTOR, true);
-    const histogramSeries = this.labelValues[HISTOGRAM_SELECTOR];
-    if (histogramSeries && histogramSeries['__name__']) {
-      this.histogramMetrics = histogramSeries['__name__'].slice().sort();
+    return defaultValue;
+  };
+
+  start = async (timeRange?: TimeRange): Promise<any[]> => {
+    this.timeRange = timeRange ?? getDefaultTimeRange();
+
+    if (this.datasource.lookupsDisabled) {
+      return [];
     }
+
+    this.metrics = (await this.fetchLabelValues('__name__')) || [];
+    this.histogramMetrics = processHistogramMetrics(this.metrics).sort();
+    return Promise.all([this.loadMetricsMetadata(), this.fetchLabels()]);
+  };
+
+  async loadMetricsMetadata() {
+    const headers = buildCacheHeaders(this.datasource.getDaysToCacheMetadata() * secondsInDay);
+    this.metricsMetadata = fixSummariesMetadata(
+      await this.request(
+        '/api/v1/metadata',
+        {},
+        {},
+        {
+          showErrorAlert: false,
+          ...headers,
+        }
+      )
+    );
   }
 
-  async fetchLabelValues(key: string) {
-    const url = `/api/v1/label/${key}/values`;
+  getLabelKeys(): string[] {
+    return this.labelKeys;
+  }
+
+  importFromAbstractQuery(labelBasedQuery: AbstractQuery): PromQuery {
+    return toPromLikeQuery(labelBasedQuery);
+  }
+
+  exportToAbstractQuery(query: PromQuery): AbstractQuery {
+    const promQuery = query.expr;
+    if (!promQuery || promQuery.length === 0) {
+      return { refId: query.refId, labelMatchers: [] };
+    }
+    const tokens = Prism.tokenize(promQuery, PromqlSyntax);
+    const labelMatchers: AbstractLabelMatcher[] = extractLabelMatchers(tokens);
+    const nameLabelValue = getNameLabelValue(promQuery, tokens);
+    if (nameLabelValue && nameLabelValue.length > 0) {
+      labelMatchers.push({
+        name: '__name__',
+        operator: AbstractLabelOperator.Equal,
+        value: nameLabelValue,
+      });
+    }
+
+    return {
+      refId: query.refId,
+      labelMatchers,
+    };
+  }
+
+  async getSeries(selector: string, withName?: boolean): Promise<Record<string, string[]>> {
+    if (this.datasource.lookupsDisabled) {
+      return {};
+    }
     try {
-      const res = await this.request(url);
-      const body = await (res.data || res.json());
-      const exisingValues = this.labelValues[EMPTY_SELECTOR];
-      const values = {
-        ...exisingValues,
-        [key]: body.data,
-      };
-      this.labelValues = {
-        ...this.labelValues,
-        [EMPTY_SELECTOR]: values,
-      };
-    } catch (e) {
-      console.error(e);
+      if (selector === EMPTY_SELECTOR) {
+        return await this.fetchDefaultSeries();
+      } else {
+        return await this.fetchSeriesLabels(selector, withName);
+      }
+    } catch (error) {
+      // TODO: better error handling
+      console.error(error);
+      return {};
     }
   }
 
-  async fetchSeriesLabels(name: string, withName?: boolean) {
-    const url = `/api/v1/series?match[]=${name}`;
-    try {
-      const res = await this.request(url);
-      const body = await (res.data || res.json());
-      const { keys, values } = processLabels(body.data, withName);
-      this.labelKeys = {
-        ...this.labelKeys,
-        [name]: keys,
-      };
-      this.labelValues = {
-        ...this.labelValues,
-        [name]: values,
-      };
-    } catch (e) {
-      console.error(e);
+  /**
+   * @param key
+   */
+  fetchLabelValues = async (key: string): Promise<string[]> => {
+    const params = this.datasource.getAdjustedInterval(this.timeRange);
+    const interpolatedName = this.datasource.interpolateString(key);
+    const url = `/api/v1/label/${interpolatedName}/values`;
+    const value = await this.request(url, [], params, this.getDefaultCacheHeaders());
+    return value ?? [];
+  };
+
+  async getLabelValues(key: string): Promise<string[]> {
+    return await this.fetchLabelValues(key);
+  }
+
+  /**
+   * Fetches all label keys
+   */
+  async fetchLabels(timeRange?: TimeRange): Promise<string[]> {
+    if (timeRange) {
+      this.timeRange = timeRange;
+    }
+    const url = '/api/v1/labels';
+    const params = this.datasource.getAdjustedInterval(this.timeRange);
+    this.labelFetchTs = Date.now().valueOf();
+
+    const res = await this.request(url, [], params, this.getDefaultCacheHeaders());
+    if (Array.isArray(res)) {
+      this.labelKeys = res.slice().sort();
+    }
+
+    return [];
+  }
+
+  /**
+   * Gets series values
+   * Function to replace old getSeries calls in a way that will provide faster endpoints for new prometheus instances,
+   * while maintaining backward compatability
+   * @param labelName
+   * @param selector
+   */
+  getSeriesValues = async (labelName: string, selector: string): Promise<string[]> => {
+    if (!this.datasource.hasLabelsMatchAPISupport()) {
+      const data = await this.getSeries(selector);
+      return data[labelName] ?? [];
+    }
+    return await this.fetchSeriesValuesWithMatch(labelName, selector);
+  };
+
+  /**
+   * Fetches all values for a label, with optional match[]
+   * @param name
+   * @param match
+   */
+  fetchSeriesValuesWithMatch = async (name: string, match?: string): Promise<string[]> => {
+    const interpolatedName = name ? this.datasource.interpolateString(name) : null;
+    const interpolatedMatch = match ? this.datasource.interpolateString(match) : null;
+    const range = this.datasource.getAdjustedInterval(this.timeRange);
+    const urlParams = {
+      ...range,
+      ...(interpolatedMatch && { 'match[]': interpolatedMatch }),
+    };
+
+    const value = await this.request(
+      `/api/v1/label/${interpolatedName}/values`,
+      [],
+      urlParams,
+      this.getDefaultCacheHeaders()
+    );
+    return value ?? [];
+  };
+
+  /**
+   * Gets series labels
+   * Function to replace old getSeries calls in a way that will provide faster endpoints for new prometheus instances,
+   * while maintaining backward compatability. The old API call got the labels and the values in a single query,
+   * but with the new query we need two calls, one to get the labels, and another to get the values.
+   *
+   * @param selector
+   * @param otherLabels
+   */
+  getSeriesLabels = async (selector: string, otherLabels: Label[]): Promise<string[]> => {
+    let possibleLabelNames, data: Record<string, string[]>;
+
+    if (!this.datasource.hasLabelsMatchAPISupport()) {
+      data = await this.getSeries(selector);
+      possibleLabelNames = Object.keys(data); // all names from prometheus
+    } else {
+      // Exclude __name__ from output
+      otherLabels.push({ name: '__name__', value: '', op: '!=' });
+      data = await this.fetchSeriesLabelsMatch(selector);
+      possibleLabelNames = Object.keys(data);
+    }
+
+    const usedLabelNames = new Set(otherLabels.map((l) => l.name)); // names used in the query
+    return possibleLabelNames.filter((l) => !usedLabelNames.has(l));
+  };
+
+  /**
+   * Fetch labels for a series using /series endpoint. This is cached by its args but also by the global timeRange currently selected as
+   * they can change over requested time.
+   * @param name
+   * @param withName
+   */
+  fetchSeriesLabels = async (name: string, withName?: boolean): Promise<Record<string, string[]>> => {
+    const interpolatedName = this.datasource.interpolateString(name);
+    const range = this.datasource.getAdjustedInterval(this.timeRange);
+    const urlParams = {
+      ...range,
+      'match[]': interpolatedName,
+    };
+    const url = `/api/v1/series`;
+
+    const data = await this.request(url, [], urlParams, this.getDefaultCacheHeaders());
+    const { values } = processLabels(data, withName);
+    return values;
+  };
+
+  /**
+   * Fetch labels for a series using /labels endpoint.  This is cached by its args but also by the global timeRange currently selected as
+   * they can change over requested time.
+   * @param name
+   * @param withName
+   */
+  fetchSeriesLabelsMatch = async (name: string, withName?: boolean): Promise<Record<string, string[]>> => {
+    const interpolatedName = this.datasource.interpolateString(name);
+    const range = this.datasource.getAdjustedInterval(this.timeRange);
+    const urlParams = {
+      ...range,
+      'match[]': interpolatedName,
+    };
+    const url = `/api/v1/labels`;
+
+    const data: string[] = await this.request(url, [], urlParams, this.getDefaultCacheHeaders());
+    // Convert string array to Record<string , []>
+    return data.reduce((ac, a) => ({ ...ac, [a]: '' }), {});
+  };
+
+  /**
+   * Fetch series for a selector. Use this for raw results. Use fetchSeriesLabels() to get labels.
+   * @param match
+   */
+  fetchSeries = async (match: string): Promise<Array<Record<string, string>>> => {
+    const url = '/api/v1/series';
+    const range = this.datasource.getTimeRangeParams(this.timeRange);
+    const params = { ...range, 'match[]': match };
+    return await this.request(url, {}, params, this.getDefaultCacheHeaders());
+  };
+
+  /**
+   * Fetch this only one as we assume this won't change over time. This is cached differently from fetchSeriesLabels
+   * because we can cache more aggressively here and also we do not want to invalidate this cache the same way as in
+   * fetchSeriesLabels.
+   */
+  fetchDefaultSeries = once(async () => {
+    const values = await Promise.all(DEFAULT_KEYS.map((key) => this.fetchLabelValues(key)));
+    return DEFAULT_KEYS.reduce((acc, key, i) => ({ ...acc, [key]: values[i] }), {});
+  });
+}
+
+function getNameLabelValue(promQuery: string, tokens: any): string {
+  let nameLabelValue = '';
+
+  for (const token of tokens) {
+    if (typeof token === 'string') {
+      nameLabelValue = token;
+      break;
     }
   }
+  return nameLabelValue;
 }

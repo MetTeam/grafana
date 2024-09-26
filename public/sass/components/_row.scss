@@ -16,10 +16,6 @@
       opacity: 1;
     }
 
-    .dashboard-row__actions {
-      visibility: hidden;
-    }
-
     .dashboard-row__toggle-target {
       flex: 1;
       cursor: pointer;
@@ -27,9 +23,9 @@
     }
   }
 
-  &:hover {
+  &:hover,
+  &:focus-within {
     .dashboard-row__actions {
-      visibility: visible;
       opacity: 1;
     }
   }
@@ -37,26 +33,29 @@
 
 .dashboard-row__title {
   flex-grow: 0;
-  font-size: 1.15rem;
+  font-size: $font-size-h5;
   font-weight: $font-weight-semi-bold;
   color: $text-color;
+  background: transparent;
+  border: none;
 
   .fa {
     color: $text-muted;
     font-size: $font-size-xs;
-    padding: 0 0.5rem;
+    padding: 0 $space-sm;
   }
 }
 
 .dashboard-row__actions {
   color: $text-muted;
-  visibility: hidden;
   opacity: 0;
   transition: 200ms opacity ease-in 200ms;
 
-  a {
+  button {
     color: $text-color-weak;
     padding-left: $spacer;
+    background: transparent;
+    border: none;
 
     &:hover {
       color: $link-hover-color;
@@ -75,7 +74,7 @@
 
 .dashboard-row__drag {
   cursor: move;
-  width: 1rem;
+  width: 16px;
   height: 100%;
   background: url('../img/grab_dark.svg') no-repeat 50% 50%;
   background-size: 8px;

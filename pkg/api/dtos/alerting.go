@@ -6,23 +6,8 @@ import (
 
 	"github.com/grafana/grafana/pkg/components/null"
 	"github.com/grafana/grafana/pkg/components/simplejson"
-	"github.com/grafana/grafana/pkg/models"
+	"github.com/grafana/grafana/pkg/services/alerting/models"
 )
-
-type AlertRule struct {
-	Id             int64                 `json:"id"`
-	DashboardId    int64                 `json:"dashboardId"`
-	PanelId        int64                 `json:"panelId"`
-	Name           string                `json:"name"`
-	Message        string                `json:"message"`
-	State          models.AlertStateType `json:"state"`
-	NewStateDate   time.Time             `json:"newStateDate"`
-	EvalDate       time.Time             `json:"evalDate"`
-	EvalData       *simplejson.Json      `json:"evalData"`
-	ExecutionError string                `json:"executionError"`
-	Url            string                `json:"url"`
-	CanEdit        bool                  `json:"canEdit"`
-}
 
 func formatShort(interval time.Duration) string {
 	var result string
@@ -38,7 +23,7 @@ func formatShort(interval time.Duration) string {
 		result += fmt.Sprintf("%dm", mins)
 	}
 
-	remaining = remaining - (mins * time.Minute)
+	remaining -= (mins * time.Minute)
 	seconds := remaining / time.Second
 	if seconds > 0 {
 		result += fmt.Sprintf("%ds", seconds)
@@ -48,8 +33,9 @@ func formatShort(interval time.Duration) string {
 }
 
 func NewAlertNotification(notification *models.AlertNotification) *AlertNotification {
-	return &AlertNotification{
-		Id:                    notification.Id,
+	dto := &AlertNotification{
+		Id:                    notification.ID,
+		Uid:                   notification.UID,
 		Name:                  notification.Name,
 		Type:                  notification.Type,
 		IsDefault:             notification.IsDefault,
@@ -59,11 +45,21 @@ func NewAlertNotification(notification *models.AlertNotification) *AlertNotifica
 		SendReminder:          notification.SendReminder,
 		DisableResolveMessage: notification.DisableResolveMessage,
 		Settings:              notification.Settings,
+		SecureFields:          map[string]bool{},
 	}
+
+	if notification.SecureSettings != nil {
+		for k := range notification.SecureSettings {
+			dto.SecureFields[k] = true
+		}
+	}
+
+	return dto
 }
 
 type AlertNotification struct {
 	Id                    int64            `json:"id"`
+	Uid                   string           `json:"uid"`
 	Name                  string           `json:"name"`
 	Type                  string           `json:"type"`
 	IsDefault             bool             `json:"isDefault"`
@@ -73,6 +69,25 @@ type AlertNotification struct {
 	Created               time.Time        `json:"created"`
 	Updated               time.Time        `json:"updated"`
 	Settings              *simplejson.Json `json:"settings"`
+	SecureFields          map[string]bool  `json:"secureFields"`
+}
+
+func NewAlertNotificationLookup(notification *models.AlertNotification) *AlertNotificationLookup {
+	return &AlertNotificationLookup{
+		Id:        notification.ID,
+		Uid:       notification.UID,
+		Name:      notification.Name,
+		Type:      notification.Type,
+		IsDefault: notification.IsDefault,
+	}
+}
+
+type AlertNotificationLookup struct {
+	Id        int64  `json:"id"`
+	Uid       string `json:"uid"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	IsDefault bool   `json:"isDefault"`
 }
 
 type AlertTestCommand struct {
@@ -91,8 +106,8 @@ type AlertTestResult struct {
 }
 
 type AlertTestResultLog struct {
-	Message string      `json:"message"`
-	Data    interface{} `json:"data"`
+	Message string `json:"message"`
+	Data    any    `json:"data"`
 }
 
 type EvalMatch struct {
@@ -102,12 +117,14 @@ type EvalMatch struct {
 }
 
 type NotificationTestCommand struct {
-	Name                  string           `json:"name"`
-	Type                  string           `json:"type"`
-	SendReminder          bool             `json:"sendReminder"`
-	DisableResolveMessage bool             `json:"disableResolveMessage"`
-	Frequency             string           `json:"frequency"`
-	Settings              *simplejson.Json `json:"settings"`
+	ID                    int64             `json:"id,omitempty"`
+	Name                  string            `json:"name"`
+	Type                  string            `json:"type"`
+	SendReminder          bool              `json:"sendReminder"`
+	DisableResolveMessage bool              `json:"disableResolveMessage"`
+	Frequency             string            `json:"frequency"`
+	Settings              *simplejson.Json  `json:"settings"`
+	SecureSettings        map[string]string `json:"secureSettings"`
 }
 
 type PauseAlertCommand struct {

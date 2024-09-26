@@ -1,6 +1,8 @@
-import React, { PureComponent } from 'react';
+import React, { useCallback } from 'react';
 import Highlighter from 'react-highlight-words';
-import classNames from 'classnames';
+
+import { Icon, Button, LinkButton, Card } from '@grafana/ui';
+
 import { AlertRule } from '../../types';
 
 export interface Props {
@@ -9,61 +11,50 @@ export interface Props {
   onTogglePause: () => void;
 }
 
-class AlertRuleItem extends PureComponent<Props> {
-  renderText(text: string) {
-    return (
+const AlertRuleItem = ({ rule, search, onTogglePause }: Props) => {
+  const ruleUrl = `${rule.url}?editPanel=${rule.panelId}&tab=alert`;
+  const renderText = useCallback(
+    (text: string) => (
       <Highlighter
+        key={text}
         highlightClassName="highlight-search-match"
         textToHighlight={text}
-        searchWords={[this.props.search]}
+        searchWords={[search]}
       />
-    );
-  }
+    ),
+    [search]
+  );
 
-  render() {
-    const { rule, onTogglePause } = this.props;
-
-    const iconClassName = classNames({
-      fa: true,
-      'fa-play': rule.state === 'paused',
-      'fa-pause': rule.state !== 'paused',
-    });
-
-    const ruleUrl = `${rule.url}?panelId=${rule.panelId}&fullscreen=true&edit=true&tab=alert`;
-
-    return (
-      <li className="alert-rule-item">
-        <span className={`alert-rule-item__icon ${rule.stateClass}`}>
-          <i className={rule.stateIcon} />
+  return (
+    <Card>
+      <Card.Heading>{renderText(rule.name)}</Card.Heading>
+      <Card.Figure>
+        <Icon size="xl" name={rule.stateIcon} className={`alert-rule-item__icon ${rule.stateClass}`} />
+      </Card.Figure>
+      <Card.Meta>
+        <span key="state">
+          <span key="text" className={`${rule.stateClass}`}>
+            {renderText(rule.stateText)}{' '}
+          </span>
+          for {rule.stateAge}
         </span>
-        <div className="alert-rule-item__body">
-          <div className="alert-rule-item__header">
-            <div className="alert-rule-item__name">
-              <a href={ruleUrl}>{this.renderText(rule.name)}</a>
-            </div>
-            <div className="alert-rule-item__text">
-              <span className={`${rule.stateClass}`}>{this.renderText(rule.stateText)}</span>
-              <span className="alert-rule-item__time"> for {rule.stateAge}</span>
-            </div>
-          </div>
-          {rule.info && <div className="small muted alert-rule-item__info">{this.renderText(rule.info)}</div>}
-        </div>
-
-        <div className="alert-rule-item__actions">
-          <button
-            className="btn btn-small btn-inverse alert-list__btn width-2"
-            title="Pausing an alert rule prevents it from executing"
-            onClick={onTogglePause}
-          >
-            <i className={iconClassName} />
-          </button>
-          <a className="btn btn-small btn-inverse alert-list__btn width-2" href={ruleUrl} title="Edit alert rule">
-            <i className="icon-gf icon-gf-settings" />
-          </a>
-        </div>
-      </li>
-    );
-  }
-}
+        {rule.info ? renderText(rule.info) : null}
+      </Card.Meta>
+      <Card.Actions>
+        <Button
+          key="play"
+          variant="secondary"
+          icon={rule.state === 'paused' ? 'play' : 'pause'}
+          onClick={onTogglePause}
+        >
+          {rule.state === 'paused' ? 'Resume' : 'Pause'}
+        </Button>
+        <LinkButton key="edit" variant="secondary" href={ruleUrl} icon="cog">
+          Edit alert
+        </LinkButton>
+      </Card.Actions>
+    </Card>
+  );
+};
 
 export default AlertRuleItem;

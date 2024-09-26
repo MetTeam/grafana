@@ -1,40 +1,48 @@
-import { FolderState } from 'app/types';
-import { Action, ActionTypes } from './actions';
-import { processAclItems } from 'app/core/utils/acl';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
-export const inititalState: FolderState = {
+import { endpoints } from 'app/features/browse-dashboards/api/browseDashboardsAPI';
+import { FolderDTO, FolderState } from 'app/types';
+
+export const initialState: FolderState = {
   id: 0,
   uid: 'loading',
   title: 'loading',
   url: '',
   canSave: false,
+  canDelete: false,
   hasChanged: false,
   version: 1,
-  permissions: [],
 };
 
-export const folderReducer = (state = inititalState, action: Action): FolderState => {
-  switch (action.type) {
-    case ActionTypes.LoadFolder:
-      return {
-        ...state,
-        ...action.payload,
-        hasChanged: false,
-      };
-    case ActionTypes.SetFolderTitle:
+const loadFolderReducer = (state: FolderState, action: PayloadAction<FolderDTO>): FolderState => {
+  return {
+    ...state,
+    ...action.payload,
+    hasChanged: false,
+  };
+};
+
+const folderSlice = createSlice({
+  name: 'folder',
+  initialState,
+  reducers: {
+    loadFolder: loadFolderReducer,
+    setFolderTitle: (state, action: PayloadAction<string>): FolderState => {
       return {
         ...state,
         title: action.payload,
         hasChanged: action.payload.trim().length > 0,
       };
-    case ActionTypes.LoadFolderPermissions:
-      return {
-        ...state,
-        permissions: processAclItems(action.payload),
-      };
-  }
-  return state;
-};
+    },
+  },
+  extraReducers: (builder) => {
+    builder.addMatcher(endpoints.getFolder.matchFulfilled, loadFolderReducer);
+  },
+});
+
+export const { loadFolder, setFolderTitle } = folderSlice.actions;
+
+export const folderReducer = folderSlice.reducer;
 
 export default {
   folder: folderReducer,

@@ -1,6 +1,8 @@
-import { Action, ActionTypes } from './actions';
-import { FolderDTO, OrgRole, PermissionLevel, FolderState } from 'app/types';
-import { inititalState, folderReducer } from './reducers';
+import { FolderDTO, FolderState } from 'app/types';
+
+import { reducerTester } from '../../../../test/core/redux/reducerTester';
+
+import { folderReducer, initialState, loadFolder, setFolderTitle } from './reducers';
 
 function getTestFolder(): FolderDTO {
   return {
@@ -9,89 +11,57 @@ function getTestFolder(): FolderDTO {
     uid: 'asd',
     url: 'url',
     canSave: true,
+    canEdit: true,
+    canAdmin: true,
+    canDelete: true,
     version: 0,
+    created: '',
+    createdBy: '',
+    hasAcl: false,
+    updated: '',
+    updatedBy: '',
   };
 }
 
 describe('folder reducer', () => {
-  describe('loadFolder', () => {
+  describe('when loadFolder is dispatched', () => {
     it('should load folder and set hasChanged to false', () => {
-      const folder = getTestFolder();
-
-      const action: Action = {
-        type: ActionTypes.LoadFolder,
-        payload: folder,
-      };
-
-      const state = folderReducer(inititalState, action);
-
-      expect(state.hasChanged).toEqual(false);
-      expect(state.title).toEqual('test folder');
+      reducerTester<FolderState>()
+        .givenReducer(folderReducer, { ...initialState, hasChanged: true })
+        .whenActionIsDispatched(loadFolder(getTestFolder()))
+        .thenStateShouldEqual({
+          ...initialState,
+          hasChanged: false,
+          ...getTestFolder(),
+        });
     });
   });
 
-  describe('detFolderTitle', () => {
-    it('should set title', () => {
-      const action: Action = {
-        type: ActionTypes.SetFolderTitle,
-        payload: 'new title',
-      };
-
-      const state = folderReducer(inititalState, action);
-
-      expect(state.hasChanged).toEqual(true);
-      expect(state.title).toEqual('new title');
-    });
-  });
-
-  describe('loadFolderPermissions', () => {
-    let state: FolderState;
-
-    beforeEach(() => {
-      const action: Action = {
-        type: ActionTypes.LoadFolderPermissions,
-        payload: [
-          { id: 2, dashboardId: 1, role: OrgRole.Viewer, permission: PermissionLevel.View },
-          { id: 3, dashboardId: 1, role: OrgRole.Editor, permission: PermissionLevel.Edit },
-          {
-            id: 4,
-            dashboardId: 10,
-            permission: PermissionLevel.View,
-            teamId: 1,
-            team: 'MyTestTeam',
-            inherited: true,
-          },
-          {
-            id: 5,
-            dashboardId: 1,
-            permission: PermissionLevel.View,
-            userId: 1,
-            userLogin: 'MyTestUser',
-          },
-          {
-            id: 6,
-            dashboardId: 1,
-            permission: PermissionLevel.Edit,
-            teamId: 2,
-            team: 'MyTestTeam2',
-          },
-        ],
-      };
-
-      state = folderReducer(inititalState, action);
+  describe('when setFolderTitle is dispatched', () => {
+    describe('and title has length', () => {
+      it('then state should be correct', () => {
+        reducerTester<FolderState>()
+          .givenReducer(folderReducer, { ...initialState })
+          .whenActionIsDispatched(setFolderTitle('ready'))
+          .thenStateShouldEqual({
+            ...initialState,
+            hasChanged: true,
+            title: 'ready',
+          });
+      });
     });
 
-    it('should add permissions to state', async () => {
-      expect(state.permissions.length).toBe(5);
-    });
-
-    it('should be sorted by sort rank and alphabetically', async () => {
-      expect(state.permissions[0].name).toBe('MyTestTeam');
-      expect(state.permissions[0].dashboardId).toBe(10);
-      expect(state.permissions[1].name).toBe('Editor');
-      expect(state.permissions[2].name).toBe('Viewer');
-      expect(state.permissions[3].name).toBe('MyTestTeam2');
-      expect(state.permissions[4].name).toBe('MyTestUser');
+    describe('and title has no length', () => {
+      it('then state should be correct', () => {
+        reducerTester<FolderState>()
+          .givenReducer(folderReducer, { ...initialState })
+          .whenActionIsDispatched(setFolderTitle(''))
+          .thenStateShouldEqual({
+            ...initialState,
+            hasChanged: false,
+            title: '',
+          });
+      });
     });
   });
 });

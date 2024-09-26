@@ -2,208 +2,258 @@ package cloudwatch
 
 import (
 	"context"
+	"fmt"
 	"testing"
-	"time"
-
-	"github.com/grafana/grafana/pkg/models"
-	"github.com/grafana/grafana/pkg/tsdb"
 
 	"github.com/aws/aws-sdk-go/aws"
+	awsclient "github.com/aws/aws-sdk-go/aws/client"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
-	"github.com/grafana/grafana/pkg/components/null"
-	"github.com/grafana/grafana/pkg/components/simplejson"
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
+	"github.com/google/go-cmp/cmp"
+	"github.com/grafana/grafana-aws-sdk/pkg/awsds"
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/datasource"
+	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
+	"github.com/grafana/grafana/pkg/infra/httpclient"
+	"github.com/grafana/grafana/pkg/services/featuremgmt"
+	"github.com/grafana/grafana/pkg/tsdb/cloudwatch/mocks"
+	"github.com/grafana/grafana/pkg/tsdb/cloudwatch/models"
+	"github.com/grafana/grafana/pkg/tsdb/cloudwatch/utils"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
-func TestCloudWatch(t *testing.T) {
-	Convey("CloudWatch", t, func() {
-
-		Convey("executeQuery", func() {
-			e := &CloudWatchExecutor{
-				DataSource: &models.DataSource{
-					JsonData: simplejson.New(),
+func TestNewInstanceSettings(t *testing.T) {
+	tests := []struct {
+		name       string
+		settings   backend.DataSourceInstanceSettings
+		expectedDS DataSource
+		Err        require.ErrorAssertionFunc
+	}{
+		{
+			name: "creates a request",
+			settings: backend.DataSourceInstanceSettings{
+				JSONData: []byte(`{
+					"profile": "foo",
+					"defaultRegion": "us-east2",
+					"assumeRoleArn": "role",
+					"externalId": "id",
+					"endpoint": "bar",
+					"customMetricsNamespaces": "ns",
+					"authType": "keys"
+				}`),
+				DecryptedSecureJSONData: map[string]string{
+					"accessKey": "A123",
+					"secretKey": "secret",
 				},
-			}
+			},
+			expectedDS: DataSource{
+				Settings: models.CloudWatchSettings{
+					AWSDatasourceSettings: awsds.AWSDatasourceSettings{
+						Profile:       "foo",
+						Region:        "us-east2",
+						AssumeRoleARN: "role",
+						ExternalID:    "id",
+						Endpoint:      "bar",
+						AuthType:      awsds.AuthTypeKeys,
+						AccessKey:     "A123",
+						SecretKey:     "secret",
+					},
+					Namespace: "ns",
+				},
+			},
+			Err: require.NoError,
+		},
+	}
 
-			Convey("End time before start time should result in error", func() {
-				_, err := e.executeQuery(context.Background(), &CloudWatchQuery{}, &tsdb.TsdbQuery{TimeRange: tsdb.NewTimeRange("now-1h", "now-2h")})
-				So(err.Error(), ShouldEqual, "Invalid time range: Start time must be before end time")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := NewInstanceSettings(httpclient.NewProvider())
+			model, err := f(context.Background(), tt.settings)
+			tt.Err(t, err)
+			datasourceComparer := cmp.Comparer(func(d1 DataSource, d2 DataSource) bool {
+				return d1.Settings.Profile == d2.Settings.Profile &&
+					d1.Settings.Region == d2.Settings.Region &&
+					d1.Settings.AuthType == d2.Settings.AuthType &&
+					d1.Settings.AssumeRoleARN == d2.Settings.AssumeRoleARN &&
+					d1.Settings.ExternalID == d2.Settings.ExternalID &&
+					d1.Settings.Namespace == d2.Settings.Namespace &&
+					d1.Settings.Endpoint == d2.Settings.Endpoint &&
+					d1.Settings.AccessKey == d2.Settings.AccessKey &&
+					d1.Settings.SecretKey == d2.Settings.SecretKey
 			})
+			if !cmp.Equal(model.(DataSource), tt.expectedDS, datasourceComparer) {
+				t.Errorf("Unexpected result. Expecting\n%v \nGot:\n%v", model, tt.expectedDS)
+			}
+		})
+	}
+}
 
-			Convey("End time equals start time should result in error", func() {
-				_, err := e.executeQuery(context.Background(), &CloudWatchQuery{}, &tsdb.TsdbQuery{TimeRange: tsdb.NewTimeRange("now-1h", "now-1h")})
-				So(err.Error(), ShouldEqual, "Invalid time range: Start time must be before end time")
+func Test_CheckHealth(t *testing.T) {
+	origNewMetricsAPI := NewMetricsAPI
+	origNewCWLogsClient := NewCWLogsClient
+	origNewLogsAPI := NewLogsAPI
+
+	t.Cleanup(func() {
+		NewMetricsAPI = origNewMetricsAPI
+		NewCWLogsClient = origNewCWLogsClient
+		NewLogsAPI = origNewLogsAPI
+	})
+
+	var client fakeCheckHealthClient
+	NewMetricsAPI = func(sess *session.Session) models.CloudWatchMetricsAPIProvider {
+		return client
+	}
+	NewLogsAPI = func(sess *session.Session) models.CloudWatchLogsAPIProvider {
+		return client
+	}
+	im := datasource.NewInstanceManager(func(ctx context.Context, s backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
+		return DataSource{Settings: models.CloudWatchSettings{
+			AWSDatasourceSettings: awsds.AWSDatasourceSettings{
+				Region: "us-east-1",
+			},
+		}}, nil
+	})
+
+	t.Run("successfully query metrics and logs", func(t *testing.T) {
+		client = fakeCheckHealthClient{}
+		executor := newExecutor(im, newTestConfig(), &fakeSessionCache{}, featuremgmt.WithFeatures())
+
+		resp, err := executor.CheckHealth(context.Background(), &backend.CheckHealthRequest{
+			PluginContext: backend.PluginContext{DataSourceInstanceSettings: &backend.DataSourceInstanceSettings{}},
+		})
+
+		assert.NoError(t, err)
+		assert.Equal(t, &backend.CheckHealthResult{
+			Status:  backend.HealthStatusOk,
+			Message: "1. Successfully queried the CloudWatch metrics API.\n2. Successfully queried the CloudWatch logs API.",
+		}, resp)
+	})
+
+	t.Run("successfully queries metrics, fails during logs query", func(t *testing.T) {
+		client = fakeCheckHealthClient{
+			describeLogGroups: func(input *cloudwatchlogs.DescribeLogGroupsInput) (*cloudwatchlogs.DescribeLogGroupsOutput, error) {
+				return nil, fmt.Errorf("some logs query error")
+			}}
+
+		executor := newExecutor(im, newTestConfig(), &fakeSessionCache{}, featuremgmt.WithFeatures())
+
+		resp, err := executor.CheckHealth(context.Background(), &backend.CheckHealthRequest{
+			PluginContext: backend.PluginContext{DataSourceInstanceSettings: &backend.DataSourceInstanceSettings{}},
+		})
+
+		assert.NoError(t, err)
+		assert.Equal(t, &backend.CheckHealthResult{
+			Status:  backend.HealthStatusError,
+			Message: "1. Successfully queried the CloudWatch metrics API.\n2. CloudWatch logs query failed: some logs query error",
+		}, resp)
+	})
+
+	t.Run("successfully queries logs, fails during metrics query", func(t *testing.T) {
+		client = fakeCheckHealthClient{
+			listMetricsPages: func(input *cloudwatch.ListMetricsInput, fn func(*cloudwatch.ListMetricsOutput, bool) bool) error {
+				return fmt.Errorf("some list metrics error")
+			}}
+
+		executor := newExecutor(im, newTestConfig(), &fakeSessionCache{}, featuremgmt.WithFeatures())
+
+		resp, err := executor.CheckHealth(context.Background(), &backend.CheckHealthRequest{
+			PluginContext: backend.PluginContext{DataSourceInstanceSettings: &backend.DataSourceInstanceSettings{}},
+		})
+
+		assert.NoError(t, err)
+		assert.Equal(t, &backend.CheckHealthResult{
+			Status:  backend.HealthStatusError,
+			Message: "1. CloudWatch metrics query failed: some list metrics error\n2. Successfully queried the CloudWatch logs API.",
+		}, resp)
+	})
+
+	t.Run("fail to get clients", func(t *testing.T) {
+		client = fakeCheckHealthClient{}
+
+		executor := newExecutor(im, newTestConfig(), &fakeSessionCache{getSession: func(c awsds.SessionConfig) (*session.Session, error) {
+			return nil, fmt.Errorf("some sessions error")
+		}}, featuremgmt.WithFeatures())
+
+		resp, err := executor.CheckHealth(context.Background(), &backend.CheckHealthRequest{
+			PluginContext: backend.PluginContext{DataSourceInstanceSettings: &backend.DataSourceInstanceSettings{}},
+		})
+
+		assert.NoError(t, err)
+		assert.Equal(t, &backend.CheckHealthResult{
+			Status:  backend.HealthStatusError,
+			Message: "1. CloudWatch metrics query failed: some sessions error\n2. CloudWatch logs query failed: some sessions error",
+		}, resp)
+	})
+}
+
+func TestQuery_ResourceRequest_DescribeLogGroups_with_CrossAccountQuerying(t *testing.T) {
+	sender := &mockedCallResourceResponseSenderForOauth{}
+	origNewMetricsAPI := NewMetricsAPI
+	origNewOAMAPI := NewOAMAPI
+	origNewLogsAPI := NewLogsAPI
+	origNewEC2Client := NewEC2Client
+	NewMetricsAPI = func(sess *session.Session) models.CloudWatchMetricsAPIProvider { return nil }
+	NewOAMAPI = func(sess *session.Session) models.OAMAPIProvider { return nil }
+	NewEC2Client = func(provider awsclient.ConfigProvider) models.EC2APIProvider { return nil }
+	t.Cleanup(func() {
+		NewOAMAPI = origNewOAMAPI
+		NewMetricsAPI = origNewMetricsAPI
+		NewLogsAPI = origNewLogsAPI
+		NewEC2Client = origNewEC2Client
+	})
+
+	var logsApi mocks.LogsAPI
+	NewLogsAPI = func(sess *session.Session) models.CloudWatchLogsAPIProvider {
+		return &logsApi
+	}
+
+	im := datasource.NewInstanceManager(func(ctx context.Context, s backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
+		return DataSource{Settings: models.CloudWatchSettings{
+			AWSDatasourceSettings: awsds.AWSDatasourceSettings{
+				Region: "us-east-1",
+			},
+		}}, nil
+	})
+
+	t.Run("maps log group api response to resource response of log-groups", func(t *testing.T) {
+		logsApi = mocks.LogsAPI{}
+		logsApi.On("DescribeLogGroupsWithContext", mock.Anything).Return(&cloudwatchlogs.DescribeLogGroupsOutput{
+			LogGroups: []*cloudwatchlogs.LogGroup{
+				{Arn: aws.String("arn:aws:logs:us-east-1:111:log-group:group_a"), LogGroupName: aws.String("group_a")},
+			},
+		}, nil)
+		req := &backend.CallResourceRequest{
+			Method: "GET",
+			Path:   `/log-groups?logGroupPattern=some-pattern&accountId=some-account-id`,
+			PluginContext: backend.PluginContext{
+				DataSourceInstanceSettings: &backend.DataSourceInstanceSettings{ID: 0},
+				PluginID:                   "cloudwatch",
+			},
+		}
+
+		executor := newExecutor(im, newTestConfig(), &fakeSessionCache{}, featuremgmt.WithFeatures(featuremgmt.FlagCloudWatchCrossAccountQuerying))
+		err := executor.CallResource(context.Background(), req, sender)
+		assert.NoError(t, err)
+
+		assert.JSONEq(t, `[
+		   {
+			  "accountId":"111",
+			  "value":{
+				 "arn":"arn:aws:logs:us-east-1:111:log-group:group_a",
+				 "name":"group_a"
+			  }
+		   }
+		]`, string(sender.Response.Body))
+
+		logsApi.AssertCalled(t, "DescribeLogGroupsWithContext",
+			&cloudwatchlogs.DescribeLogGroupsInput{
+				AccountIdentifiers:    []*string{utils.Pointer("some-account-id")},
+				IncludeLinkedAccounts: utils.Pointer(true),
+				Limit:                 utils.Pointer(int64(50)),
+				LogGroupNamePrefix:    utils.Pointer("some-pattern"),
 			})
-		})
-
-		Convey("can parse cloudwatch json model", func() {
-			json := `
-				{
-					"region": "us-east-1",
-					"namespace": "AWS/ApplicationELB",
-					"metricName": "TargetResponseTime",
-					"dimensions": {
-						"LoadBalancer": "lb",
-						"TargetGroup": "tg"
-					},
-					"statistics": [
-						"Average",
-						"Maximum",
-						"p50.00",
-						"p90.00"
-					],
-					"period": "60",
-					"highResolution": false,
-					"alias": "{{metric}}_{{stat}}"
-				}
-			`
-			modelJson, err := simplejson.NewJson([]byte(json))
-			So(err, ShouldBeNil)
-
-			res, err := parseQuery(modelJson)
-			So(err, ShouldBeNil)
-			So(res.Region, ShouldEqual, "us-east-1")
-			So(res.Namespace, ShouldEqual, "AWS/ApplicationELB")
-			So(res.MetricName, ShouldEqual, "TargetResponseTime")
-			So(len(res.Dimensions), ShouldEqual, 2)
-			So(*res.Dimensions[0].Name, ShouldEqual, "LoadBalancer")
-			So(*res.Dimensions[0].Value, ShouldEqual, "lb")
-			So(*res.Dimensions[1].Name, ShouldEqual, "TargetGroup")
-			So(*res.Dimensions[1].Value, ShouldEqual, "tg")
-			So(len(res.Statistics), ShouldEqual, 2)
-			So(*res.Statistics[0], ShouldEqual, "Average")
-			So(*res.Statistics[1], ShouldEqual, "Maximum")
-			So(len(res.ExtendedStatistics), ShouldEqual, 2)
-			So(*res.ExtendedStatistics[0], ShouldEqual, "p50.00")
-			So(*res.ExtendedStatistics[1], ShouldEqual, "p90.00")
-			So(res.Period, ShouldEqual, 60)
-			So(res.Alias, ShouldEqual, "{{metric}}_{{stat}}")
-		})
-
-		Convey("can parse cloudwatch response", func() {
-			timestamp := time.Unix(0, 0)
-			resp := &cloudwatch.GetMetricStatisticsOutput{
-				Label: aws.String("TargetResponseTime"),
-				Datapoints: []*cloudwatch.Datapoint{
-					{
-						Timestamp: aws.Time(timestamp),
-						Average:   aws.Float64(10.0),
-						Maximum:   aws.Float64(20.0),
-						ExtendedStatistics: map[string]*float64{
-							"p50.00": aws.Float64(30.0),
-							"p90.00": aws.Float64(40.0),
-						},
-						Unit: aws.String("Seconds"),
-					},
-				},
-			}
-			query := &CloudWatchQuery{
-				Region:     "us-east-1",
-				Namespace:  "AWS/ApplicationELB",
-				MetricName: "TargetResponseTime",
-				Dimensions: []*cloudwatch.Dimension{
-					{
-						Name:  aws.String("LoadBalancer"),
-						Value: aws.String("lb"),
-					},
-					{
-						Name:  aws.String("TargetGroup"),
-						Value: aws.String("tg"),
-					},
-				},
-				Statistics:         []*string{aws.String("Average"), aws.String("Maximum")},
-				ExtendedStatistics: []*string{aws.String("p50.00"), aws.String("p90.00")},
-				Period:             60,
-				Alias:              "{{namespace}}_{{metric}}_{{stat}}",
-			}
-
-			queryRes, err := parseResponse(resp, query)
-			So(err, ShouldBeNil)
-			So(queryRes.Series[0].Name, ShouldEqual, "AWS/ApplicationELB_TargetResponseTime_Average")
-			So(queryRes.Series[0].Tags["LoadBalancer"], ShouldEqual, "lb")
-			So(queryRes.Series[0].Tags["TargetGroup"], ShouldEqual, "tg")
-			So(queryRes.Series[0].Points[0][0].String(), ShouldEqual, null.FloatFrom(10.0).String())
-			So(queryRes.Series[1].Points[0][0].String(), ShouldEqual, null.FloatFrom(20.0).String())
-			So(queryRes.Series[2].Points[0][0].String(), ShouldEqual, null.FloatFrom(30.0).String())
-			So(queryRes.Series[3].Points[0][0].String(), ShouldEqual, null.FloatFrom(40.0).String())
-			So(queryRes.Meta.Get("unit").MustString(), ShouldEqual, "s")
-		})
-
-		Convey("terminate gap of data points", func() {
-			timestamp := time.Unix(0, 0)
-			resp := &cloudwatch.GetMetricStatisticsOutput{
-				Label: aws.String("TargetResponseTime"),
-				Datapoints: []*cloudwatch.Datapoint{
-					{
-						Timestamp: aws.Time(timestamp),
-						Average:   aws.Float64(10.0),
-						Maximum:   aws.Float64(20.0),
-						ExtendedStatistics: map[string]*float64{
-							"p50.00": aws.Float64(30.0),
-							"p90.00": aws.Float64(40.0),
-						},
-						Unit: aws.String("Seconds"),
-					},
-					{
-						Timestamp: aws.Time(timestamp.Add(60 * time.Second)),
-						Average:   aws.Float64(20.0),
-						Maximum:   aws.Float64(30.0),
-						ExtendedStatistics: map[string]*float64{
-							"p50.00": aws.Float64(40.0),
-							"p90.00": aws.Float64(50.0),
-						},
-						Unit: aws.String("Seconds"),
-					},
-					{
-						Timestamp: aws.Time(timestamp.Add(180 * time.Second)),
-						Average:   aws.Float64(30.0),
-						Maximum:   aws.Float64(40.0),
-						ExtendedStatistics: map[string]*float64{
-							"p50.00": aws.Float64(50.0),
-							"p90.00": aws.Float64(60.0),
-						},
-						Unit: aws.String("Seconds"),
-					},
-				},
-			}
-			query := &CloudWatchQuery{
-				Region:     "us-east-1",
-				Namespace:  "AWS/ApplicationELB",
-				MetricName: "TargetResponseTime",
-				Dimensions: []*cloudwatch.Dimension{
-					{
-						Name:  aws.String("LoadBalancer"),
-						Value: aws.String("lb"),
-					},
-					{
-						Name:  aws.String("TargetGroup"),
-						Value: aws.String("tg"),
-					},
-				},
-				Statistics:         []*string{aws.String("Average"), aws.String("Maximum")},
-				ExtendedStatistics: []*string{aws.String("p50.00"), aws.String("p90.00")},
-				Period:             60,
-				Alias:              "{{namespace}}_{{metric}}_{{stat}}",
-			}
-
-			queryRes, err := parseResponse(resp, query)
-			So(err, ShouldBeNil)
-			So(queryRes.Series[0].Points[0][0].String(), ShouldEqual, null.FloatFrom(10.0).String())
-			So(queryRes.Series[1].Points[0][0].String(), ShouldEqual, null.FloatFrom(20.0).String())
-			So(queryRes.Series[2].Points[0][0].String(), ShouldEqual, null.FloatFrom(30.0).String())
-			So(queryRes.Series[3].Points[0][0].String(), ShouldEqual, null.FloatFrom(40.0).String())
-			So(queryRes.Series[0].Points[1][0].String(), ShouldEqual, null.FloatFrom(20.0).String())
-			So(queryRes.Series[1].Points[1][0].String(), ShouldEqual, null.FloatFrom(30.0).String())
-			So(queryRes.Series[2].Points[1][0].String(), ShouldEqual, null.FloatFrom(40.0).String())
-			So(queryRes.Series[3].Points[1][0].String(), ShouldEqual, null.FloatFrom(50.0).String())
-			So(queryRes.Series[0].Points[2][0].String(), ShouldEqual, null.FloatFromPtr(nil).String())
-			So(queryRes.Series[1].Points[2][0].String(), ShouldEqual, null.FloatFromPtr(nil).String())
-			So(queryRes.Series[2].Points[2][0].String(), ShouldEqual, null.FloatFromPtr(nil).String())
-			So(queryRes.Series[3].Points[2][0].String(), ShouldEqual, null.FloatFromPtr(nil).String())
-			So(queryRes.Series[0].Points[3][0].String(), ShouldEqual, null.FloatFrom(30.0).String())
-			So(queryRes.Series[1].Points[3][0].String(), ShouldEqual, null.FloatFrom(40.0).String())
-			So(queryRes.Series[2].Points[3][0].String(), ShouldEqual, null.FloatFrom(50.0).String())
-			So(queryRes.Series[3].Points[3][0].String(), ShouldEqual, null.FloatFrom(60.0).String())
-		})
 	})
 }

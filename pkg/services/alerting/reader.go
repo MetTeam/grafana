@@ -1,66 +1,51 @@
 package alerting
 
 import (
+	"context"
 	"sync"
-	"time"
 
-	"github.com/grafana/grafana/pkg/bus"
-	"github.com/grafana/grafana/pkg/log"
-	"github.com/grafana/grafana/pkg/metrics"
-	m "github.com/grafana/grafana/pkg/models"
+	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/infra/metrics"
+	"github.com/grafana/grafana/pkg/services/alerting/models"
 )
 
-type RuleReader interface {
-	Fetch() []*Rule
+type ruleReader interface {
+	fetch(context.Context) []*Rule
 }
 
-type DefaultRuleReader struct {
+type defaultRuleReader struct {
 	sync.RWMutex
-	//serverID       string
-	serverPosition int
-	clusterSize    int
-	log            log.Logger
+	sqlStore AlertStore
+	log      log.Logger
 }
 
-func NewRuleReader() *DefaultRuleReader {
-	ruleReader := &DefaultRuleReader{
-		log: log.New("alerting.ruleReader"),
+func newRuleReader(sqlStore AlertStore) *defaultRuleReader {
+	ruleReader := &defaultRuleReader{
+		sqlStore: sqlStore,
+		log:      log.New("alerting.ruleReader"),
 	}
 
-	go ruleReader.initReader()
 	return ruleReader
 }
 
-func (arr *DefaultRuleReader) initReader() {
-	heartbeat := time.NewTicker(time.Second * 10)
+func (arr *defaultRuleReader) fetch(ctx context.Context) []*Rule {
+	cmd := &models.GetAllAlertsQuery{}
 
-	for range heartbeat.C {
-		arr.heartbeat()
-	}
-}
-
-func (arr *DefaultRuleReader) Fetch() []*Rule {
-	cmd := &m.GetAllAlertsQuery{}
-
-	if err := bus.Dispatch(cmd); err != nil {
+	alerts, err := arr.sqlStore.GetAllAlertQueryHandler(ctx, cmd)
+	if err != nil {
 		arr.log.Error("Could not load alerts", "error", err)
 		return []*Rule{}
 	}
 
 	res := make([]*Rule, 0)
-	for _, ruleDef := range cmd.Result {
-		if model, err := NewRuleFromDBAlert(ruleDef); err != nil {
-			arr.log.Error("Could not build alert model for rule", "ruleId", ruleDef.Id, "error", err)
+	for _, ruleDef := range alerts {
+		if model, err := NewRuleFromDBAlert(ctx, arr.sqlStore, ruleDef, false); err != nil {
+			arr.log.Error("Could not build alert model for rule", "ruleId", ruleDef.ID, "error", err)
 		} else {
 			res = append(res, model)
 		}
 	}
 
-	metrics.M_Alerting_Active_Alerts.Set(float64(len(res)))
+	metrics.MAlertingActiveAlerts.Set(float64(len(res)))
 	return res
-}
-
-func (arr *DefaultRuleReader) heartbeat() {
-	arr.clusterSize = 1
-	arr.serverPosition = 1
 }

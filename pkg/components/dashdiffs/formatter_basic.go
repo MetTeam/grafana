@@ -22,8 +22,8 @@ type BasicDiff struct {
 // A BasicBlock represents a top-level element in a basic diff.
 type BasicBlock struct {
 	Title     string
-	Old       interface{}
-	New       interface{}
+	Old       any
+	New       any
 	Change    ChangeType
 	Changes   []*BasicChange
 	Summaries []*BasicSummary
@@ -35,8 +35,8 @@ type BasicBlock struct {
 // BasicChanges in a BasicBlock.
 type BasicChange struct {
 	Key       string
-	Old       interface{}
-	New       interface{}
+	Old       any
+	New       any
 	Change    ChangeType
 	LineStart int
 	LineEnd   int
@@ -60,7 +60,7 @@ type BasicFormatter struct {
 	tpl      *template.Template
 }
 
-func NewBasicFormatter(left interface{}) *BasicFormatter {
+func NewBasicFormatter(left any) *BasicFormatter {
 	tpl := template.Must(template.New("block").Funcs(tplFuncMap).Parse(tplBlock))
 	tpl = template.Must(tpl.New("change").Funcs(tplFuncMap).Parse(tplChange))
 	tpl = template.Must(tpl.New("summary").Funcs(tplFuncMap).Parse(tplSummary))
@@ -155,14 +155,13 @@ func (b *BasicDiff) Basic(lines []*JSONLine) []*BasicBlock {
 					b.Block.Changes = append(b.Block.Changes, b.Change)
 
 				default:
-					//ok
+					// ok
 				}
 
 				// otherwise, we're dealing with a change at a deeper level. We
 				// know there's a change somewhere in the JSON tree, but we
 				// don't know exactly where, so we go deeper.
 			} else {
-
 				// if the change is anything but unchanged, continue processing
 				//
 				// we keep "narrowing" the key as we go deeper, in order to
@@ -213,12 +212,10 @@ func (b *BasicDiff) Basic(lines []*JSONLine) []*BasicBlock {
 					// - if we're not recording a change, then we do nothing,
 					// since the BasicDiff doesn't report on unchanged JSON
 					// values.
-				} else {
-					if b.writing {
-						b.writing = false
-						b.Summary.LineEnd = line.LineNum
-						b.Block.Summaries = append(b.Block.Summaries, b.Summary)
-					}
+				} else if b.writing {
+					b.writing = false
+					b.Summary.LineEnd = line.LineNum
+					b.Block.Summaries = append(b.Block.Summaries, b.Summary)
 				}
 			}
 		}
@@ -332,18 +329,18 @@ var (
 <div class="diff-group">
 	<div class="diff-block">
 		<h2 class="diff-block-title">
-			<i class="diff-circle diff-circle-{{ getChange .Change }} fa fa-circle"></i>
+			<icon class="diff-circle diff-circle-{{ getChange .Change }}" name="'circle'" type="'mono'"></icon>
 			<strong class="diff-title">{{ .Title }}</strong> {{ getChange .Change }}
 		</h2>
 
 
 		<!-- Overview -->
 		{{ if .Old }}
-			<div class="diff-label">{{ .Old }}</div>
-			<i class="diff-arrow fa fa-long-arrow-right"></i>
+			<div class="diff-label" ng-non-bindable>{{ .Old }}</div>
+			<icon name="'arrow-right'"></icon>
 		{{ end }}
 		{{ if .New }}
-				<div class="diff-label">{{ .New }}</div>
+				<div class="diff-label" ng-non-bindable>{{ .New }}</div>
 		{{ end }}
 
 		{{ if .LineStart }}
@@ -380,11 +377,11 @@ var (
 
 		<div class="diff-change-item">
 			{{ if .Old }}
-				<div class="diff-label">{{ .Old }}</div>
-				<i class="diff-arrow fa fa-long-arrow-right"></i>
+				<div class="diff-label" ng-non-bindable>{{ .Old }}</div>
+				<icon name="'arrow-right'"></icon>
 			{{ end }}
 			{{ if .New }}
-					<div class="diff-label">{{ .New }}</div>
+					<div class="diff-label" ng-non-bindable>{{ .New }}</div>
 			{{ end }}
 		</div>
 
@@ -402,7 +399,7 @@ var (
 	// tplSummary is for basic summaries.
 	tplSummary = `{{ define "summary" -}}
 <div class="diff-group-name">
-	<i class="diff-circle diff-circle-{{ getChange .Change }} fa fa-circle-o diff-list-circle"></i>
+	<icon class="diff-circle diff-circle-{{ getChange .Change }} diff-list-circle" name="'circle'"></icon>
 
 	{{ if .Count }}
 		<strong>{{ .Count }}</strong>

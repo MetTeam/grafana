@@ -1,96 +1,91 @@
 'use strict';
 
-const merge = require('webpack-merge');
-const UglifyJsPlugin = require('uglifyjs-webpack-plugin');
-const common = require('./webpack.common.js');
+const browserslist = require('browserslist');
+const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
+const { EsbuildPlugin } = require('esbuild-loader');
+const { resolveToEsbuildTarget } = require('esbuild-plugin-browserslist');
+const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const path = require('path');
-const ngAnnotatePlugin = require('ng-annotate-webpack-plugin');
-const HtmlWebpackPlugin = require("html-webpack-plugin");
-const MiniCssExtractPlugin = require("mini-css-extract-plugin");
-const OptimizeCSSAssetsPlugin = require("optimize-css-assets-webpack-plugin");
+const WebpackAssetsManifest = require('webpack-assets-manifest');
+const { WebpackManifestPlugin } = require('webpack-manifest-plugin');
+const { merge } = require('webpack-merge');
 
-module.exports = merge(common, {
-  mode: 'production',
-  devtool: "source-map",
+const common = require('./webpack.common.js');
+const esbuildTargets = resolveToEsbuildTarget(browserslist(), { printUnknownTargets: false });
 
-  entry: {
-    dark: './public/sass/grafana.dark.scss',
-    light: './public/sass/grafana.light.scss',
-  },
+// esbuild-loader 3.0.0+ requires format to be set to prevent it
+// from defaulting to 'iife' which breaks monaco/loader once minified.
+const esbuildOptions = {
+  target: esbuildTargets,
+  format: undefined,
+};
 
-  module: {
-    rules: [
-      {
-        test: /\.tsx?$/,
-        enforce: 'pre',
-        exclude: /node_modules/,
-        use: {
-          loader: 'tslint-loader',
-          options: {
-            emitErrors: true,
-            typeCheck: false,
-          }
-        }
-      },
-      {
-        test: /\.tsx?$/,
-        exclude: /node_modules/,
-        use: {
-          loader: 'ts-loader',
-          options: {
-            transpileOnly: true
+module.exports = (env = {}) =>
+  merge(common, {
+    mode: 'production',
+    devtool: 'source-map',
+
+    entry: {
+      dark: './public/sass/grafana.dark.scss',
+      light: './public/sass/grafana.light.scss',
+    },
+
+    module: {
+      // Note: order is bottom-to-top and/or right-to-left
+      rules: [
+        {
+          test: /\.tsx?$/,
+          exclude: /node_modules/,
+          use: {
+            loader: 'esbuild-loader',
+            options: esbuildOptions,
           },
         },
-      },
-      require('./sass.rule.js')({
-        sourceMap: false, minimize: false, preserveUrl: false
-      })
-    ]
-  },
-
-  optimization: {
-    splitChunks: {
-      cacheGroups: {
-        commons: {
-          test: /[\\/]node_modules[\\/].*[jt]sx?$/,
-          name: "vendor",
-          chunks: "all"
-        }
-      }
+        require('./sass.rule.js')({
+          sourceMap: false,
+          preserveUrl: false,
+        }),
+      ],
     },
-    minimizer: [
-      new UglifyJsPlugin({
-        cache: true,
-        parallel: true,
-        sourceMap: true
-      }),
-      new OptimizeCSSAssetsPlugin({})
-    ]
-  },
+    optimization: {
+      nodeEnv: 'production',
+      minimize: parseInt(env.noMinify, 10) !== 1,
+      minimizer: [new EsbuildPlugin(esbuildOptions), new CssMinimizerPlugin()],
+    },
 
-  plugins: [
-    new MiniCssExtractPlugin({
-      filename: "grafana.[name].[hash].css"
-    }),
-    new ngAnnotatePlugin(),
-    new HtmlWebpackPlugin({
-      filename: path.resolve(__dirname, '../../public/views/error.html'),
-      template: path.resolve(__dirname, '../../public/views/error-template.html'),
-      inject: false,
-    }),
-    new HtmlWebpackPlugin({
-      filename: path.resolve(__dirname, '../../public/views/index.html'),
-      template: path.resolve(__dirname, '../../public/views/index-template.html'),
-      inject: 'body',
-      chunks: ['vendor', 'app'],
-    }),
-    function () {
-      this.hooks.done.tap('Done', function (stats) {
-        if (stats.compilation.errors && stats.compilation.errors.length) {
-          console.log(stats.compilation.errors);
-          process.exit(1);
-        }
-      });
-    }
-  ]
-});
+    // enable persistent cache for faster builds
+    cache: {
+      type: 'filesystem',
+      name: 'grafana-default-production',
+      buildDependencies: {
+        config: [__filename],
+      },
+    },
+
+    plugins: [
+      new MiniCssExtractPlugin({
+        filename: 'grafana.[name].[contenthash].css',
+      }),
+      /**
+       * I know we have two manifest plugins here.
+       * WebpackManifestPlugin was only used in prod before and does not support integrity hashes
+       */
+      new WebpackAssetsManifest({
+        entrypoints: true,
+        integrity: true,
+        publicPath: true,
+      }),
+      new WebpackManifestPlugin({
+        fileName: path.join(process.cwd(), 'manifest.json'),
+        filter: (file) => !file.name.endsWith('.map'),
+      }),
+      function () {
+        this.hooks.done.tap('Done', function (stats) {
+          if (stats.compilation.errors && stats.compilation.errors.length) {
+            console.log(stats.compilation.errors);
+            process.exit(1);
+          }
+        });
+      },
+    ],
+  });

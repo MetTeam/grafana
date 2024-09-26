@@ -2,111 +2,92 @@ package bus
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/grafana/grafana/pkg/infra/tracing"
 )
 
 type testQuery struct {
-	Id   int64
+	ID   int64
 	Resp string
 }
 
-func TestDispatchCtxCanUseNormalHandlers(t *testing.T) {
-	bus := New()
+func TestEventPublish(t *testing.T) {
+	bus := ProvideBus(tracing.InitializeTracerForTest())
 
-	handlerWithCtxCallCount := 0
-	handlerCallCount := 0
+	var invoked bool
 
-	handlerWithCtx := func(ctx context.Context, query *testQuery) error {
-		handlerWithCtxCallCount++
+	bus.AddEventListener(func(ctx context.Context, query *testQuery) error {
+		invoked = true
 		return nil
-	}
-
-	handler := func(query *testQuery) error {
-		handlerCallCount++
-		return nil
-	}
-
-	err := bus.DispatchCtx(context.Background(), &testQuery{})
-	if err != ErrHandlerNotFound {
-		t.Errorf("expected bus to return HandlerNotFound is no handler is registered")
-	}
-
-	bus.AddHandler(handler)
-
-	t.Run("when a normal handler is registered", func(t *testing.T) {
-		bus.Dispatch(&testQuery{})
-
-		if handlerCallCount != 1 {
-			t.Errorf("Expected normal handler to be called 1 time. was called %d", handlerCallCount)
-		}
-
-		t.Run("when a ctx handler is registered", func(t *testing.T) {
-			bus.AddHandlerCtx(handlerWithCtx)
-			bus.Dispatch(&testQuery{})
-
-			if handlerWithCtxCallCount != 1 {
-				t.Errorf("Expected ctx handler to be called 1 time. was called %d", handlerWithCtxCallCount)
-			}
-		})
 	})
 
+	err := bus.Publish(context.Background(), &testQuery{})
+	require.NoError(t, err, "unable to publish event")
+
+	require.True(t, invoked)
 }
 
-func TestQueryHandlerReturnsError(t *testing.T) {
-	bus := New()
+func TestEventPublish_NoRegisteredListener(t *testing.T) {
+	bus := ProvideBus(tracing.InitializeTracerForTest())
 
-	bus.AddHandler(func(query *testQuery) error {
-		return errors.New("handler error")
-	})
-
-	err := bus.Dispatch(&testQuery{})
-
-	if err == nil {
-		t.Fatal("Send query failed " + err.Error())
-	} else {
-		t.Log("Handler error received ok")
-	}
+	err := bus.Publish(context.Background(), &testQuery{})
+	require.NoError(t, err, "unable to publish event")
 }
 
-func TestQueryHandlerReturn(t *testing.T) {
-	bus := New()
+func TestEventCtxPublishCtx(t *testing.T) {
+	bus := ProvideBus(tracing.InitializeTracerForTest())
 
-	bus.AddHandler(func(q *testQuery) error {
-		q.Resp = "hello from handler"
+	var invoked bool
+
+	bus.AddEventListener(func(ctx context.Context, query *testQuery) error {
+		invoked = true
 		return nil
 	})
 
-	query := &testQuery{}
-	err := bus.Dispatch(query)
+	err := bus.Publish(context.Background(), &testQuery{})
+	require.NoError(t, err, "unable to publish event")
 
-	if err != nil {
-		t.Fatal("Send query failed " + err.Error())
-	} else if query.Resp != "hello from handler" {
-		t.Fatal("Failed to get response from handler")
-	}
+	require.True(t, invoked)
 }
 
-func TestEventListeners(t *testing.T) {
-	bus := New()
-	count := 0
+func TestEventPublishCtx_NoRegisteredListener(t *testing.T) {
+	bus := ProvideBus(tracing.InitializeTracerForTest())
 
-	bus.AddEventListener(func(query *testQuery) error {
-		count += 1
+	err := bus.Publish(context.Background(), &testQuery{})
+	require.NoError(t, err, "unable to publish event")
+}
+
+func TestEventPublishCtx(t *testing.T) {
+	bus := ProvideBus(tracing.InitializeTracerForTest())
+
+	var invoked bool
+
+	bus.AddEventListener(func(ctx context.Context, query *testQuery) error {
+		invoked = true
 		return nil
 	})
 
-	bus.AddEventListener(func(query *testQuery) error {
-		count += 10
+	err := bus.Publish(context.Background(), &testQuery{})
+	require.NoError(t, err, "unable to publish event")
+
+	require.True(t, invoked)
+}
+
+func TestEventCtxPublish(t *testing.T) {
+	bus := ProvideBus(tracing.InitializeTracerForTest())
+
+	var invoked bool
+
+	bus.AddEventListener(func(ctx context.Context, query *testQuery) error {
+		invoked = true
 		return nil
 	})
 
-	err := bus.Publish(&testQuery{})
+	err := bus.Publish(context.Background(), &testQuery{})
+	require.NoError(t, err, "unable to publish event")
 
-	if err != nil {
-		t.Fatal("Publish event failed " + err.Error())
-	} else if count != 11 {
-		t.Fatal(fmt.Sprintf("Publish event failed, listeners called: %v, expected: %v", count, 11))
-	}
+	require.True(t, invoked)
 }

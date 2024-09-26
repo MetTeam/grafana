@@ -1,29 +1,34 @@
+import { includes } from 'lodash';
 import React, { PureComponent } from 'react';
-import { connect } from 'react-redux';
-import _ from 'lodash';
-import { hot } from 'react-hot-loader';
-import config from 'app/core/config';
-import PageHeader from 'app/core/components/PageHeader/PageHeader';
-import TeamMembers from './TeamMembers';
-import TeamSettings from './TeamSettings';
-import TeamGroupSync from './TeamGroupSync';
-import { NavModel, Team } from 'app/types';
-import { loadTeam } from './state/actions';
-import { getTeam } from './state/selectors';
-import { getTeamLoadingNav } from './state/navModel';
-import { getNavModel } from 'app/core/selectors/navModel';
-import { getRouteParamsId, getRouteParamsPage } from '../../core/selectors/location';
+import { connect, ConnectedProps } from 'react-redux';
 
-export interface Props {
-  team: Team;
-  loadTeam: typeof loadTeam;
-  teamId: number;
-  pageName: string;
-  navModel: NavModel;
+import { featureEnabled } from '@grafana/runtime';
+import { Themeable2, withTheme2 } from '@grafana/ui';
+import { Page } from 'app/core/components/Page/Page';
+import { UpgradeBox } from 'app/core/components/Upgrade/UpgradeBox';
+import config from 'app/core/config';
+import { GrafanaRouteComponentProps } from 'app/core/navigation/types';
+import { getNavModel } from 'app/core/selectors/navModel';
+import { contextSrv } from 'app/core/services/context_srv';
+import { AccessControlAction, StoreState } from 'app/types';
+
+import TeamGroupSync, { TeamSyncUpgradeContent } from './TeamGroupSync';
+import TeamPermissions from './TeamPermissions';
+import TeamSettings from './TeamSettings';
+import { loadTeam } from './state/actions';
+import { getTeamLoadingNav } from './state/navModel';
+import { getTeam } from './state/selectors';
+
+interface TeamPageRouteParams {
+  id: string;
+  page: string | null;
 }
+
+export interface OwnProps extends GrafanaRouteComponentProps<TeamPageRouteParams>, Themeable2 {}
 
 interface State {
   isSyncEnabled: boolean;
+  isLoading: boolean;
 }
 
 enum PageTypes {
@@ -32,12 +37,41 @@ enum PageTypes {
   GroupSync = 'groupsync',
 }
 
+function mapStateToProps(state: StoreState, props: OwnProps) {
+  const teamId = parseInt(props.match.params.id, 10);
+  const team = getTeam(state.team, teamId);
+  let defaultPage = 'members';
+  // With RBAC the settings page will always be available
+  if (!team || !contextSrv.hasPermissionInMetadata(AccessControlAction.ActionTeamsPermissionsRead, team)) {
+    defaultPage = 'settings';
+  }
+  const pageName = props.match.params.page ?? defaultPage;
+  const teamLoadingNav = getTeamLoadingNav(pageName);
+  const pageNav = getNavModel(state.navIndex, `team-${pageName}-${teamId}`, teamLoadingNav).main;
+
+  return {
+    pageNav,
+    teamId: teamId,
+    pageName: pageName,
+    team,
+  };
+}
+
+const mapDispatchToProps = {
+  loadTeam,
+};
+
+const connector = connect(mapStateToProps, mapDispatchToProps);
+
+export type Props = OwnProps & ConnectedProps<typeof connector>;
+
 export class TeamPages extends PureComponent<Props, State> {
-  constructor(props) {
+  constructor(props: Props) {
     super(props);
 
     this.state = {
-      isSyncEnabled: config.buildInfo.isEnterprise,
+      isLoading: false,
+      isSyncEnabled: featureEnabled('teamsync'),
     };
   }
 
@@ -47,60 +81,81 @@ export class TeamPages extends PureComponent<Props, State> {
 
   async fetchTeam() {
     const { loadTeam, teamId } = this.props;
-
-    return await loadTeam(teamId);
+    this.setState({ isLoading: true });
+    const team = await loadTeam(teamId);
+    this.setState({ isLoading: false });
+    return team;
   }
 
   getCurrentPage() {
     const pages = ['members', 'settings', 'groupsync'];
     const currentPage = this.props.pageName;
-    return _.includes(pages, currentPage) ? currentPage : pages[0];
+    return includes(pages, currentPage) ? currentPage : pages[0];
   }
 
-  renderPage() {
+  textsAreEqual = (text1: string, text2: string) => {
+    if (!text1 && !text2) {
+      return true;
+    }
+
+    if (!text1 || !text2) {
+      return false;
+    }
+
+    return text1.toLocaleLowerCase() === text2.toLocaleLowerCase();
+  };
+
+  renderPage(): React.ReactNode {
     const { isSyncEnabled } = this.state;
+    const { team } = this.props;
     const currentPage = this.getCurrentPage();
+
+    const canReadTeam = contextSrv.hasPermissionInMetadata(AccessControlAction.ActionTeamsRead, team!);
+    const canReadTeamPermissions = contextSrv.hasPermissionInMetadata(
+      AccessControlAction.ActionTeamsPermissionsRead,
+      team!
+    );
+    const canWriteTeamPermissions = contextSrv.hasPermissionInMetadata(
+      AccessControlAction.ActionTeamsPermissionsWrite,
+      team!
+    );
 
     switch (currentPage) {
       case PageTypes.Members:
-        return <TeamMembers syncEnabled={isSyncEnabled} />;
-
+        if (canReadTeamPermissions) {
+          return <TeamPermissions team={team!} />;
+        }
       case PageTypes.Settings:
-        return <TeamSettings />;
+        return canReadTeam && <TeamSettings team={team!} />;
       case PageTypes.GroupSync:
-        return isSyncEnabled && <TeamGroupSync />;
+        if (isSyncEnabled) {
+          if (canReadTeamPermissions) {
+            return <TeamGroupSync isReadOnly={!canWriteTeamPermissions} />;
+          }
+        } else if (config.featureToggles.featureHighlights) {
+          return (
+            <>
+              <UpgradeBox featureName={'team sync'} featureId={'team-sync'} />
+              <TeamSyncUpgradeContent />
+            </>
+          );
+        }
     }
 
     return null;
   }
 
   render() {
-    const { team, navModel } = this.props;
+    const { team, pageNav } = this.props;
 
     return (
-      <div>
-        <PageHeader model={navModel} />
-        {team && Object.keys(team).length !== 0 && <div className="page-container page-body">{this.renderPage()}</div>}
-      </div>
+      <Page navId="teams" pageNav={pageNav}>
+        <Page.Contents isLoading={this.state.isLoading}>
+          {team && Object.keys(team).length !== 0 && this.renderPage()}
+        </Page.Contents>
+      </Page>
     );
   }
 }
 
-function mapStateToProps(state) {
-  const teamId = getRouteParamsId(state.location);
-  const pageName = getRouteParamsPage(state.location) || 'members';
-  const teamLoadingNav = getTeamLoadingNav(pageName);
-
-  return {
-    navModel: getNavModel(state.navIndex, `team-${pageName}-${teamId}`, teamLoadingNav),
-    teamId: teamId,
-    pageName: pageName,
-    team: getTeam(state.team, teamId),
-  };
-}
-
-const mapDispatchToProps = {
-  loadTeam,
-};
-
-export default hot(module)(connect(mapStateToProps, mapDispatchToProps)(TeamPages));
+export default connector(withTheme2(TeamPages));

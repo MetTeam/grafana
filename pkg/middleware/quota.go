@@ -3,22 +3,28 @@ package middleware
 import (
 	"fmt"
 
-	"gopkg.in/macaron.v1"
-
-	m "github.com/grafana/grafana/pkg/models"
+	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
 	"github.com/grafana/grafana/pkg/services/quota"
+	"github.com/grafana/grafana/pkg/web"
 )
 
-func Quota(target string) macaron.Handler {
-	return func(c *m.ReqContext) {
-		limitReached, err := quota.QuotaReached(c, target)
-		if err != nil {
-			c.JsonApiErr(500, "failed to get quota", err)
-			return
-		}
-		if limitReached {
-			c.JsonApiErr(403, fmt.Sprintf("%s Quota reached", target), nil)
-			return
+// Quota returns a function that returns a function used to call quotaservice based on target name
+func Quota(quotaService quota.Service) func(string) web.Handler {
+	if quotaService == nil {
+		panic("quotaService is nil")
+	}
+	//https://open.spotify.com/track/7bZSoBEAEEUsGEuLOf94Jm?si=T1Tdju5qRSmmR0zph_6RBw fuuuuunky
+	return func(targetSrv string) web.Handler {
+		return func(c *contextmodel.ReqContext) {
+			limitReached, err := quotaService.QuotaReached(c, quota.TargetSrv(targetSrv))
+			if err != nil {
+				c.JsonApiErr(500, "Failed to get quota", err)
+				return
+			}
+			if limitReached {
+				c.JsonApiErr(403, fmt.Sprintf("%s Quota reached", targetSrv), nil)
+				return
+			}
 		}
 	}
 }

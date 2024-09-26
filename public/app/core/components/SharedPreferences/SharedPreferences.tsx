@@ -1,139 +1,253 @@
+import { css } from '@emotion/css';
 import React, { PureComponent } from 'react';
 
-import { Label } from 'app/core/components/Label/Label';
-import Select from 'app/core/components/Select/Select';
-import { getBackendSrv, BackendSrv } from 'app/core/services/backend_srv';
-
-import { DashboardSearchHit } from 'app/types';
+import { FeatureState, SelectableValue, getBuiltInThemes, ThemeRegistryItem } from '@grafana/data';
+import { selectors } from '@grafana/e2e-selectors';
+import { config, reportInteraction } from '@grafana/runtime';
+import { Preferences as UserPreferencesDTO } from '@grafana/schema/src/raw/preferences/x/preferences_types.gen';
+import {
+  Button,
+  Field,
+  FieldSet,
+  Form,
+  Label,
+  Select,
+  stylesFactory,
+  TimeZonePicker,
+  WeekStartPicker,
+  FeatureBadge,
+} from '@grafana/ui';
+import { DashboardPicker } from 'app/core/components/Select/DashboardPicker';
+import { t, Trans } from 'app/core/internationalization';
+import { LANGUAGES } from 'app/core/internationalization/constants';
+import { PreferencesService } from 'app/core/services/PreferencesService';
+import { changeTheme } from 'app/core/services/theme';
 
 export interface Props {
   resourceUri: string;
+  disabled?: boolean;
+  preferenceType: 'org' | 'team' | 'user';
+  onConfirm?: () => Promise<boolean>;
 }
 
-export interface State {
-  homeDashboardId: number;
-  theme: string;
-  timezone: string;
-  dashboards: DashboardSearchHit[];
+export type State = UserPreferencesDTO;
+
+function getLanguageOptions(): Array<SelectableValue<string>> {
+  const languageOptions = LANGUAGES.map((v) => ({
+    value: v.code,
+    label: v.name,
+  }));
+
+  const options = [
+    {
+      value: '',
+      label: t('common.locale.default', 'Default'),
+    },
+    ...languageOptions,
+  ];
+
+  return options;
 }
-
-const themes = [{ value: '', label: 'Default' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }];
-
-const timezones = [
-  { value: '', label: 'Default' },
-  { value: 'browser', label: 'Local browser time' },
-  { value: 'utc', label: 'UTC' },
-];
 
 export class SharedPreferences extends PureComponent<Props, State> {
-  backendSrv: BackendSrv = getBackendSrv();
+  service: PreferencesService;
+  themeOptions: SelectableValue[];
 
-  constructor(props) {
+  constructor(props: Props) {
     super(props);
 
+    this.service = new PreferencesService(props.resourceUri);
     this.state = {
-      homeDashboardId: 0,
       theme: '',
       timezone: '',
-      dashboards: [],
+      weekStart: '',
+      language: '',
+      queryHistory: { homeTab: '' },
     };
+
+    this.themeOptions = getBuiltInThemes(config.featureToggles.extraThemes).map((theme) => ({
+      value: theme.id,
+      label: getTranslatedThemeName(theme),
+    }));
+
+    // Add default option
+    this.themeOptions.unshift({ value: '', label: t('shared-preferences.theme.default-label', 'Default') });
   }
 
   async componentDidMount() {
-    const prefs = await this.backendSrv.get(`/api/${this.props.resourceUri}/preferences`);
-    const dashboards = await this.backendSrv.search({ starred: true });
-
-    if (prefs.homeDashboardId > 0 && !dashboards.find(d => d.id === prefs.homeDashboardId)) {
-      const missing = await this.backendSrv.search({ dashboardIds: [prefs.homeDashboardId] });
-      if (missing && missing.length > 0) {
-        dashboards.push(missing[0]);
-      }
-    }
+    const prefs = await this.service.load();
 
     this.setState({
-      homeDashboardId: prefs.homeDashboardId,
+      homeDashboardUID: prefs.homeDashboardUID,
       theme: prefs.theme,
       timezone: prefs.timezone,
-      dashboards: [{ id: 0, title: 'Default', tags: [], type: '', uid: '', uri: '', url: '' }, ...dashboards],
+      weekStart: prefs.weekStart,
+      language: prefs.language,
+      queryHistory: prefs.queryHistory,
     });
   }
 
-  onSubmitForm = async event => {
-    event.preventDefault();
+  onSubmitForm = async () => {
+    const confirmationResult = this.props.onConfirm ? await this.props.onConfirm() : true;
 
-    const { homeDashboardId, theme, timezone } = this.state;
+    if (confirmationResult) {
+      const { homeDashboardUID, theme, timezone, weekStart, language, queryHistory } = this.state;
+      await this.service.update({ homeDashboardUID, theme, timezone, weekStart, language, queryHistory });
+      window.location.reload();
+    }
+  };
 
-    await this.backendSrv.put(`/api/${this.props.resourceUri}/preferences`, {
-      homeDashboardId,
-      theme,
-      timezone,
+  onThemeChanged = (value: SelectableValue<string>) => {
+    this.setState({ theme: value.value });
+
+    if (value.value) {
+      changeTheme(value.value, true);
+    }
+  };
+
+  onTimeZoneChanged = (timezone?: string) => {
+    if (typeof timezone !== 'string') {
+      return;
+    }
+    this.setState({ timezone: timezone });
+  };
+
+  onWeekStartChanged = (weekStart: string) => {
+    this.setState({ weekStart: weekStart });
+  };
+
+  onHomeDashboardChanged = (dashboardUID: string) => {
+    this.setState({ homeDashboardUID: dashboardUID });
+  };
+
+  onLanguageChanged = (language: string) => {
+    this.setState({ language });
+
+    reportInteraction('grafana_preferences_language_changed', {
+      toLanguage: language,
+      preferenceType: this.props.preferenceType,
     });
-    window.location.reload();
-  };
-
-  onThemeChanged = (theme: string) => {
-    this.setState({ theme });
-  };
-
-  onTimeZoneChanged = (timezone: string) => {
-    this.setState({ timezone });
-  };
-
-  onHomeDashboardChanged = (dashboardId: number) => {
-    this.setState({ homeDashboardId: dashboardId });
   };
 
   render() {
-    const { theme, timezone, homeDashboardId, dashboards } = this.state;
+    const { theme, timezone, weekStart, homeDashboardUID, language } = this.state;
+    const { disabled } = this.props;
+    const styles = getStyles();
+    const languages = getLanguageOptions();
+    const currentThemeOption = this.themeOptions.find((x) => x.value === theme) ?? this.themeOptions[0];
 
     return (
-      <form className="section gf-form-group" onSubmit={this.onSubmitForm}>
-        <h3 className="page-heading">Preferences</h3>
-        <div className="gf-form">
-          <span className="gf-form-label width-11">UI Theme</span>
-          <Select
-            isSearchable={false}
-            value={themes.find(item => item.value === theme)}
-            options={themes}
-            onChange={theme => this.onThemeChanged(theme.value)}
-            width={20}
-          />
-        </div>
-        <div className="gf-form">
-          <Label
-            width={11}
-            tooltip="Not finding dashboard you want? Star it first, then it should appear in this select box."
-          >
-            Home Dashboard
-          </Label>
-          <Select
-            value={dashboards.find(dashboard => dashboard.id === homeDashboardId)}
-            getOptionValue={i => i.id}
-            getOptionLabel={i => i.title}
-            onChange={(dashboard: DashboardSearchHit) => this.onHomeDashboardChanged(dashboard.id)}
-            options={dashboards}
-            placeholder="Chose default dashboard"
-            width={20}
-          />
-        </div>
-        <div className="gf-form">
-          <label className="gf-form-label width-11">Timezone</label>
-          <Select
-            isSearchable={false}
-            value={timezones.find(item => item.value === timezone)}
-            onChange={timezone => this.onTimeZoneChanged(timezone.value)}
-            options={timezones}
-            width={20}
-          />
-        </div>
-        <div className="gf-form-button-row">
-          <button type="submit" className="btn btn-success">
-            Save
-          </button>
-        </div>
-      </form>
+      <Form onSubmit={this.onSubmitForm}>
+        {() => {
+          return (
+            <>
+              <FieldSet label={<Trans i18nKey="shared-preferences.title">Preferences</Trans>} disabled={disabled}>
+                <Field label={t('shared-preferences.fields.theme-label', 'Interface theme')}>
+                  <Select
+                    options={this.themeOptions}
+                    value={currentThemeOption}
+                    onChange={this.onThemeChanged}
+                    inputId="shared-preferences-theme-select"
+                  />
+                </Field>
+
+                <Field
+                  label={
+                    <Label htmlFor="home-dashboard-select">
+                      <span className={styles.labelText}>
+                        <Trans i18nKey="shared-preferences.fields.home-dashboard-label">Home Dashboard</Trans>
+                      </span>
+                    </Label>
+                  }
+                  data-testid="User preferences home dashboard drop down"
+                >
+                  <DashboardPicker
+                    value={homeDashboardUID}
+                    onChange={(v) => this.onHomeDashboardChanged(v?.uid ?? '')}
+                    defaultOptions={true}
+                    isClearable={true}
+                    placeholder={t('shared-preferences.fields.home-dashboard-placeholder', 'Default dashboard')}
+                    inputId="home-dashboard-select"
+                  />
+                </Field>
+
+                <Field
+                  label={t('shared-dashboard.fields.timezone-label', 'Timezone')}
+                  data-testid={selectors.components.TimeZonePicker.containerV2}
+                >
+                  <TimeZonePicker
+                    includeInternal={true}
+                    value={timezone}
+                    onChange={this.onTimeZoneChanged}
+                    inputId="shared-preferences-timezone-picker"
+                  />
+                </Field>
+
+                <Field
+                  label={t('shared-preferences.fields.week-start-label', 'Week start')}
+                  data-testid={selectors.components.WeekStartPicker.containerV2}
+                >
+                  <WeekStartPicker
+                    value={weekStart || ''}
+                    onChange={this.onWeekStartChanged}
+                    inputId={'shared-preferences-week-start-picker'}
+                  />
+                </Field>
+
+                <Field
+                  label={
+                    <Label htmlFor="locale-select">
+                      <span className={styles.labelText}>
+                        <Trans i18nKey="shared-preferences.fields.locale-label">Language</Trans>
+                      </span>
+                      <FeatureBadge featureState={FeatureState.beta} />
+                    </Label>
+                  }
+                  data-testid="User preferences language drop down"
+                >
+                  <Select
+                    value={languages.find((lang) => lang.value === language)}
+                    onChange={(lang: SelectableValue<string>) => this.onLanguageChanged(lang.value ?? '')}
+                    options={languages}
+                    placeholder={t('shared-preferences.fields.locale-placeholder', 'Choose language')}
+                    inputId="locale-select"
+                  />
+                </Field>
+              </FieldSet>
+              <Button
+                type="submit"
+                variant="primary"
+                data-testid={selectors.components.UserProfile.preferencesSaveButton}
+              >
+                <Trans i18nKey="common.save">Save</Trans>
+              </Button>
+            </>
+          );
+        }}
+      </Form>
     );
   }
 }
 
 export default SharedPreferences;
+
+const getStyles = stylesFactory(() => {
+  return {
+    labelText: css`
+      margin-right: 6px;
+    `,
+  };
+});
+
+function getTranslatedThemeName(theme: ThemeRegistryItem) {
+  switch (theme.id) {
+    case 'dark':
+      return t('shared.preferences.theme.dark-label', 'Dark');
+    case 'light':
+      return t('shared.preferences.theme.light-label', 'Light');
+    case 'system':
+      return t('shared.preferences.theme.system-label', 'System preference');
+    default:
+      return theme.name;
+  }
+}

@@ -1,15 +1,45 @@
-import _ from 'lodash';
+import { assign, each, filter, forEach, get, includes, isString, last, map, toString, isFinite } from 'lodash';
+
+import { InterpolateFunction } from '@grafana/data';
 import { isVersionGtOrEq } from 'app/core/utils/version';
 
-const index = {};
+export type ParamDef = {
+  name: string;
+  type: string;
+  options?: Array<string | number>;
+  multiple?: boolean;
+  optional?: boolean;
+  version?: string;
+};
 
-function addFuncDef(funcDef) {
+export interface FuncDef {
+  name: string;
+  params: ParamDef[];
+  defaultParams: Array<string | number>;
+  category?: string;
+  shortName?: any;
+  fake?: boolean;
+  version?: string;
+  description?: string;
+  /**
+   * True if the function was not found on the list of available function descriptions.
+   */
+  unknown?: boolean;
+}
+
+export type FuncDefs = {
+  [functionName in string]: FuncDef;
+};
+
+const index: FuncDefs = {};
+
+function addFuncDef(funcDef: Partial<FuncDef> & { name: string; category: string }) {
   funcDef.params = funcDef.params || [];
   funcDef.defaultParams = funcDef.defaultParams || [];
 
-  index[funcDef.name] = funcDef;
+  index[funcDef.name] = funcDef as FuncDef;
   if (funcDef.shortName) {
-    index[funcDef.shortName] = funcDef;
+    index[funcDef.shortName] = funcDef as FuncDef;
   }
 }
 
@@ -121,7 +151,10 @@ addFuncDef({
 addFuncDef({
   name: 'percentileOfSeries',
   category: 'Combine',
-  params: [{ name: 'n', type: 'int' }, { name: 'interpolate', type: 'boolean', options: ['true', 'false'] }],
+  params: [
+    { name: 'n', type: 'int' },
+    { name: 'interpolate', type: 'boolean', options: ['true', 'false'] },
+  ],
   defaultParams: [95, 'false'],
 });
 
@@ -161,7 +194,10 @@ addFuncDef({
 addFuncDef({
   name: 'aliasSub',
   category: 'Alias',
-  params: [{ name: 'search', type: 'string' }, { name: 'replace', type: 'string' }],
+  params: [
+    { name: 'search', type: 'string' },
+    { name: 'replace', type: 'string' },
+  ],
   defaultParams: ['', '\\1'],
 });
 
@@ -554,7 +590,10 @@ addFuncDef({
 addFuncDef({
   name: 'stdev',
   category: 'Calculate',
-  params: [{ name: 'n', type: 'int' }, { name: 'tolerance', type: 'int' }],
+  params: [
+    { name: 'n', type: 'int' },
+    { name: 'tolerance', type: 'int' },
+  ],
   defaultParams: [5, 0.1],
 });
 
@@ -603,7 +642,11 @@ addFuncDef({
 addFuncDef({
   name: 'useSeriesAbove',
   category: 'Filter Series',
-  params: [{ name: 'value', type: 'int' }, { name: 'search', type: 'string' }, { name: 'replace', type: 'string' }],
+  params: [
+    { name: 'value', type: 'int' },
+    { name: 'search', type: 'string' },
+    { name: 'replace', type: 'string' },
+  ],
   defaultParams: [0, 'search', 'replace'],
 });
 
@@ -940,45 +983,69 @@ addFuncDef({
   version: '1.1',
 });
 
-function isVersionRelatedFunction(obj, graphiteVersion) {
+function isVersionRelatedFunction(obj: { version?: string }, graphiteVersion: string) {
   return !obj.version || isVersionGtOrEq(graphiteVersion, obj.version);
 }
 
 export class FuncInstance {
-  def: any;
-  params: any;
+  def: FuncDef;
+  params: Array<string | number>;
   text: any;
-  added: boolean;
+  /**
+   * True if this function was just added and not edited yet. It's used to focus on first
+   * function param to edit it straight away after adding a function.
+   */
+  declare added: boolean;
+  /**
+   * Hidden functions are not displayed in UI but available in text editor
+   * This is used for seriesByTagUsed function which when used switches
+   * the editor to tag-only mode. Defined tags are provided to seriesByTagUsed
+   * as parameters.
+   */
+  hidden?: boolean;
 
-  constructor(funcDef, options) {
+  constructor(funcDef: FuncDef, options?: { withDefaultParams: any }) {
     this.def = funcDef;
     this.params = [];
 
-    if (options && options.withDefaultParams) {
+    if (options && options.withDefaultParams && funcDef.defaultParams) {
       this.params = funcDef.defaultParams.slice(0);
     }
 
     this.updateText();
   }
 
-  render(metricExp) {
+  render(metricExp: string, replaceVariables: InterpolateFunction): string {
     const str = this.def.name + '(';
 
-    const parameters = _.map(this.params, (value, index) => {
+    const parameters = map(this.params, (value, index) => {
       let paramType;
+
       if (index < this.def.params.length) {
         paramType = this.def.params[index].type;
-      } else if (_.get(_.last(this.def.params), 'multiple')) {
-        paramType = _.get(_.last(this.def.params), 'type');
+      } else if (get(last(this.def.params), 'multiple')) {
+        paramType = get(last(this.def.params), 'type');
       }
+
       // param types that should never be quoted
-      if (_.includes(['value_or_series', 'boolean', 'int', 'float', 'node'], paramType)) {
+      const neverQuotedParams = ['value_or_series', 'boolean', 'int', 'float', 'node', 'int_or_infinity'];
+
+      // functions that should not have param types quoted
+      // https://github.com/grafana/grafana/issues/54924
+      const neverQuotedFunctions = ['asPercent'];
+      // params or functions that should never be quoted
+      if (includes(neverQuotedParams, paramType) || includes(neverQuotedFunctions, this.def.name)) {
         return value;
       }
+
+      const valueInterpolated = isString(value) ? replaceVariables(value) : value;
+
       // param types that might be quoted
-      if (_.includes(['int_or_interval', 'node_or_tag'], paramType) && _.isFinite(+value)) {
-        return _.toString(+value);
+      // To quote variables correctly we need to interpolate it to check if it contains a numeric or string value
+      if (includes(['int_or_interval', 'node_or_tag'], paramType) && isFinite(+valueInterpolated)) {
+        return toString(value);
       }
+
       return "'" + value + "'";
     });
 
@@ -994,7 +1061,7 @@ export class FuncInstance {
     return str + parameters.join(', ') + ')';
   }
 
-  _hasMultipleParamsInString(strValue, index) {
+  _hasMultipleParamsInString(strValue: string, index: number) {
     if (strValue.indexOf(',') === -1) {
       return false;
     }
@@ -1003,18 +1070,18 @@ export class FuncInstance {
       return true;
     }
 
-    if (index + 1 >= this.def.params.length && _.get(_.last(this.def.params), 'multiple')) {
+    if (index + 1 >= this.def.params.length && get(last(this.def.params), 'multiple')) {
       return true;
     }
 
     return false;
   }
 
-  updateParam(strValue, index) {
+  updateParam(strValue: string, index: number) {
     // handle optional parameters
     // if string contains ',' and next param is optional, split and update both
     if (this._hasMultipleParamsInString(strValue, index)) {
-      _.each(strValue.split(','), (partVal, idx) => {
+      each(strValue.split(','), (partVal, idx) => {
         this.updateParam(partVal.trim(), index + idx);
       });
       return;
@@ -1042,26 +1109,26 @@ export class FuncInstance {
   }
 }
 
-function createFuncInstance(funcDef, options?, idx?) {
-  if (_.isString(funcDef)) {
+function createFuncInstance(funcDef: FuncDef | string, options?: { withDefaultParams: any }, idx?: any): FuncInstance {
+  if (isString(funcDef)) {
     funcDef = getFuncDef(funcDef, idx);
   }
   return new FuncInstance(funcDef, options);
 }
 
-function getFuncDef(name, idx?) {
+function getFuncDef(name: string, idx?: any): FuncDef {
   if (!(idx || index)[name]) {
-    throw { message: 'Method not found ' + name };
+    return { name: name, params: [{ name: '', type: '', multiple: true }], defaultParams: [''], unknown: true };
   }
   return (idx || index)[name];
 }
 
-function getFuncDefs(graphiteVersion, idx?) {
-  const funcs = {};
-  _.forEach(idx || index, funcDef => {
+function getFuncDefs(graphiteVersion: string, idx?: any): FuncDefs {
+  const funcs: FuncDefs = {};
+  forEach(idx || index, (funcDef: FuncDef) => {
     if (isVersionRelatedFunction(funcDef, graphiteVersion)) {
-      funcs[funcDef.name] = _.assign({}, funcDef, {
-        params: _.filter(funcDef.params, param => {
+      funcs[funcDef.name] = assign({}, funcDef, {
+        params: filter(funcDef.params, (param) => {
           return isVersionRelatedFunction(param, graphiteVersion);
         }),
       });
@@ -1071,10 +1138,10 @@ function getFuncDefs(graphiteVersion, idx?) {
 }
 
 // parse response from graphite /functions endpoint into internal format
-function parseFuncDefs(rawDefs) {
-  const funcDefs = {};
+function parseFuncDefs(rawDefs: any): FuncDefs {
+  const funcDefs: FuncDefs = {};
 
-  _.forEach(rawDefs || {}, (funcDef, funcName) => {
+  forEach(rawDefs || {}, (funcDef, funcName) => {
     // skip graphite graph functions
     if (funcDef.group === 'Graph') {
       return;
@@ -1089,9 +1156,9 @@ function parseFuncDefs(rawDefs) {
         .replace(/.. code-block *:: *none/g, '.. code-block::');
     }
 
-    const func = {
+    const func: FuncDef = {
       name: funcDef.name,
-      description: description,
+      description,
       category: funcDef.group,
       params: [],
       defaultParams: [],
@@ -1099,7 +1166,7 @@ function parseFuncDefs(rawDefs) {
     };
 
     // get rid of the first "seriesList" param
-    if (/^seriesLists?$/.test(_.get(funcDef, 'params[0].type', ''))) {
+    if (/^seriesLists?$/.test(get(funcDef, 'params[0].type', ''))) {
       // handle functions that accept multiple seriesLists
       // we leave the param in place but mark it optional, so users can add more series if they wish
       if (funcDef.params[0].multiple) {
@@ -1113,8 +1180,8 @@ function parseFuncDefs(rawDefs) {
       func.fake = true;
     }
 
-    _.forEach(funcDef.params, rawParam => {
-      const param = {
+    forEach(funcDef.params, (rawParam) => {
+      const param: any = {
         name: rawParam.name,
         type: 'string',
         optional: !rawParam.required,
@@ -1123,9 +1190,13 @@ function parseFuncDefs(rawDefs) {
       };
 
       if (rawParam.default !== undefined) {
-        func.defaultParams.push(_.toString(rawParam.default));
+        if (rawParam.default === Infinity) {
+          func.defaultParams.push('inf');
+        } else {
+          func.defaultParams.push(toString(rawParam.default));
+        }
       } else if (rawParam.suggestions) {
-        func.defaultParams.push(_.toString(rawParam.suggestions[0]));
+        func.defaultParams.push(toString(rawParam.suggestions[0]));
       } else {
         func.defaultParams.push('');
       }
@@ -1147,12 +1218,14 @@ function parseFuncDefs(rawDefs) {
         param.type = 'int_or_interval';
       } else if (rawParam.type === 'seriesList') {
         param.type = 'value_or_series';
+      } else if (rawParam.type === 'intOrInf') {
+        param.type = 'int_or_infinity';
       }
 
       if (rawParam.options) {
-        param.options = _.map(rawParam.options, _.toString);
+        param.options = map(rawParam.options, toString);
       } else if (rawParam.suggestions) {
-        param.options = _.map(rawParam.suggestions, _.toString);
+        param.options = map(rawParam.suggestions, toString);
       }
 
       func.params.push(param);

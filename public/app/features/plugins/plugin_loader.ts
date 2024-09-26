@@ -1,158 +1,119 @@
-import System from 'systemjs/dist/system.js';
-import _ from 'lodash';
-import * as sdk from 'app/plugins/sdk';
-import kbn from 'app/core/utils/kbn';
-import moment from 'moment';
-import angular from 'angular';
-import jquery from 'jquery';
+import {
+  AppPlugin,
+  DataSourceApi,
+  DataSourceJsonData,
+  DataSourcePlugin,
+  DataSourcePluginMeta,
+  PluginMeta,
+} from '@grafana/data';
+import { SystemJS } from '@grafana/runtime';
+import { DataQuery } from '@grafana/schema';
 
-// Experimental module exports
-import prismjs from 'prismjs';
-import slate from 'slate';
-import slateReact from 'slate-react';
-import slatePlain from 'slate-plain-serializer';
-import react from 'react';
-import reactDom from 'react-dom';
+import { GenericDataSourcePlugin } from '../datasources/types';
 
-import config from 'app/core/config';
-import TimeSeries from 'app/core/time_series2';
-import TableModel from 'app/core/table_model';
-import { coreModule, appEvents, contextSrv } from 'app/core/core';
-import { PluginExports } from 'app/types/plugins';
-import * as datemath from 'app/core/utils/datemath';
-import * as fileExport from 'app/core/utils/file_export';
-import * as flatten from 'app/core/utils/flatten';
-import * as ticks from 'app/core/utils/ticks';
-import impressionSrv from 'app/core/services/impression_srv';
 import builtInPlugins from './built_in_plugins';
-import * as d3 from 'd3';
-import * as grafanaUI from '@grafana/ui';
+import { registerPluginInCache } from './loader/cache';
+import { sharedDependenciesMap } from './loader/sharedDependencies';
+import { decorateSystemJSFetch, decorateSystemJSResolve, decorateSystemJsOnload } from './loader/systemjsHooks';
+import { SystemJSWithLoaderHooks } from './loader/types';
+import { buildImportMap } from './loader/utils';
+import { importPluginModuleInSandbox } from './sandbox/sandbox_plugin_loader';
+import { isFrontendSandboxSupported } from './sandbox/utils';
 
-// rxjs
-import { Observable, Subject } from 'rxjs';
+const imports = buildImportMap(sharedDependenciesMap);
+SystemJS.addImportMap({ imports });
 
-// add cache busting
-const bust = `?_cache=${Date.now()}`;
-function locate(load) {
-  return load.address + bust;
+const systemJSPrototype: SystemJSWithLoaderHooks = SystemJS.constructor.prototype;
+
+// Monaco Editors reliance on RequireJS means we need to transform
+// the content of the plugin code at runtime which can only be done with fetch/eval.
+systemJSPrototype.shouldFetch = () => true;
+
+const systemJSFetch = systemJSPrototype.fetch;
+systemJSPrototype.fetch = function (url: string, options?: Record<string, unknown>) {
+  return decorateSystemJSFetch(systemJSFetch, url, options);
+};
+
+const systemJSResolve = systemJSPrototype.resolve;
+systemJSPrototype.resolve = decorateSystemJSResolve.bind(systemJSPrototype, systemJSResolve);
+
+// Older plugins load .css files which resolves to a CSS Module.
+// https://github.com/WICG/webcomponents/blob/gh-pages/proposals/css-modules-v1-explainer.md#importing-a-css-module
+// Any css files loaded via SystemJS have their styles applied onload.
+systemJSPrototype.onload = decorateSystemJsOnload;
+
+export async function importPluginModule({
+  path,
+  version,
+  isAngular,
+  pluginId,
+}: {
+  path: string;
+  pluginId: string;
+  version?: string;
+  isAngular?: boolean;
+}): Promise<System.Module> {
+  if (version) {
+    registerPluginInCache({ path, version });
+  }
+
+  const builtIn = builtInPlugins[path];
+  if (builtIn) {
+    // for handling dynamic imports
+    if (typeof builtIn === 'function') {
+      return await builtIn();
+    } else {
+      return builtIn;
+    }
+  }
+
+  // the sandboxing environment code cannot work in nodejs and requires a real browser
+  if (await isFrontendSandboxSupported({ isAngular, pluginId })) {
+    return importPluginModuleInSandbox({ pluginId });
+  }
+
+  return SystemJS.import(path);
 }
-System.registry.set('plugin-loader', System.newModule({ locate: locate }));
 
-System.config({
-  baseURL: 'public',
-  defaultExtension: 'js',
-  packages: {
-    plugins: {
-      defaultExtension: 'js',
-    },
-  },
-  map: {
-    text: 'vendor/plugin-text/text.js',
-    css: 'vendor/plugin-css/css.js',
-  },
-  meta: {
-    '/*': {
-      esModule: true,
-      authorization: true,
-      loader: 'plugin-loader',
-    },
-  },
-});
+export function importDataSourcePlugin(meta: DataSourcePluginMeta): Promise<GenericDataSourcePlugin> {
+  return importPluginModule({
+    path: meta.module,
+    version: meta.info?.version,
+    isAngular: meta.angular?.detected,
+    pluginId: meta.id,
+  }).then((pluginExports) => {
+    if (pluginExports.plugin) {
+      const dsPlugin: GenericDataSourcePlugin = pluginExports.plugin;
+      dsPlugin.meta = meta;
+      return dsPlugin;
+    }
 
-function exposeToPlugin(name: string, component: any) {
-  System.registerDynamic(name, [], true, (require, exports, module) => {
-    module.exports = component;
+    if (pluginExports.Datasource) {
+      const dsPlugin = new DataSourcePlugin<
+        DataSourceApi<DataQuery, DataSourceJsonData>,
+        DataQuery,
+        DataSourceJsonData
+      >(pluginExports.Datasource);
+      dsPlugin.setComponentsFromLegacyExports(pluginExports);
+      dsPlugin.meta = meta;
+      return dsPlugin;
+    }
+
+    throw new Error('Plugin module is missing DataSourcePlugin or Datasource constructor export');
   });
 }
 
-exposeToPlugin('@grafana/ui', grafanaUI);
-exposeToPlugin('lodash', _);
-exposeToPlugin('moment', moment);
-exposeToPlugin('jquery', jquery);
-exposeToPlugin('angular', angular);
-exposeToPlugin('d3', d3);
-exposeToPlugin('rxjs/Subject', Subject);
-exposeToPlugin('rxjs/Observable', Observable);
-
-// Experimental modules
-exposeToPlugin('prismjs', prismjs);
-exposeToPlugin('slate', slate);
-exposeToPlugin('slate-react', slateReact);
-exposeToPlugin('slate-plain-serializer', slatePlain);
-exposeToPlugin('react', react);
-exposeToPlugin('react-dom', reactDom);
-
-// backward compatible path
-exposeToPlugin('vendor/npm/rxjs/Rx', {
-  Subject: Subject,
-  Observable: Observable,
-});
-
-exposeToPlugin('app/features/dashboard/impression_store', {
-  impressions: impressionSrv,
-  __esModule: true,
-});
-
-exposeToPlugin('app/plugins/sdk', sdk);
-exposeToPlugin('app/core/utils/datemath', datemath);
-exposeToPlugin('app/core/utils/file_export', fileExport);
-exposeToPlugin('app/core/utils/flatten', flatten);
-exposeToPlugin('app/core/utils/kbn', kbn);
-exposeToPlugin('app/core/utils/ticks', ticks);
-
-exposeToPlugin('app/core/config', config);
-exposeToPlugin('app/core/time_series', TimeSeries);
-exposeToPlugin('app/core/time_series2', TimeSeries);
-exposeToPlugin('app/core/table_model', TableModel);
-exposeToPlugin('app/core/app_events', appEvents);
-exposeToPlugin('app/core/core_module', coreModule);
-exposeToPlugin('app/core/core', {
-  coreModule: coreModule,
-  appEvents: appEvents,
-  contextSrv: contextSrv,
-  __esModule: true,
-});
-
-import 'vendor/flot/jquery.flot';
-import 'vendor/flot/jquery.flot.selection';
-import 'vendor/flot/jquery.flot.time';
-import 'vendor/flot/jquery.flot.stack';
-import 'vendor/flot/jquery.flot.pie';
-import 'vendor/flot/jquery.flot.stackpercent';
-import 'vendor/flot/jquery.flot.fillbelow';
-import 'vendor/flot/jquery.flot.crosshair';
-import 'vendor/flot/jquery.flot.dashes';
-import 'vendor/flot/jquery.flot.gauge';
-
-const flotDeps = [
-  'jquery.flot',
-  'jquery.flot.pie',
-  'jquery.flot.time',
-  'jquery.flot.fillbelow',
-  'jquery.flot.crosshair',
-  'jquery.flot.stack',
-  'jquery.flot.selection',
-  'jquery.flot.stackpercent',
-  'jquery.flot.events',
-  'jquery.flot.gauge',
-];
-
-for (const flotDep of flotDeps) {
-  exposeToPlugin(flotDep, { fakeDep: 1 });
-}
-
-export function importPluginModule(path: string): Promise<PluginExports> {
-  const builtIn = builtInPlugins[path];
-  if (builtIn) {
-    return Promise.resolve(builtIn);
-  }
-  return System.import(path);
-}
-
-export function loadPluginCss(options) {
-  if (config.bootData.user.lightTheme) {
-    System.import(options.light + '!css');
-  } else {
-    System.import(options.dark + '!css');
-  }
+export function importAppPlugin(meta: PluginMeta): Promise<AppPlugin> {
+  return importPluginModule({
+    path: meta.module,
+    version: meta.info?.version,
+    isAngular: meta.angular?.detected,
+    pluginId: meta.id,
+  }).then((pluginExports) => {
+    const plugin: AppPlugin = pluginExports.plugin ? pluginExports.plugin : new AppPlugin();
+    plugin.init(meta);
+    plugin.meta = meta;
+    plugin.setComponentsFromLegacyExports(pluginExports);
+    return plugin;
+  });
 }

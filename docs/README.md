@@ -1,72 +1,87 @@
-# Building The Docs
+# Building the docs locally
 
-To build the docs locally, you need to have docker installed.  The
-docs are built using [Hugo](http://gohugo.io/) - a static site generator.
+When you contribute to documentation, it's a good practice to build the docs on your local machine to make sure your changes appear as you expect. This README explains the process for doing that.
 
-**Prepare the Docker Image**:
+To build a local version, you need to run a process in a Docker container.
+Grafana periodically updates the Docker image, [`docs-base`](https://hub.docker.com/r/grafana/docs-base), to update the styling of the Docs.
 
-Git clone `grafana/grafana.org` repo. Run these commands in the root of that repo. **Note** that you may require ``sudo``
-when running ``make docs-build`` depending on how your system's docker
-service is configured):
+## Requirements
+
+- Docker >= 2.1.0.3
+- Yarn >= 1.22.4
+
+## Build the doc site
+
+First, make sure the Docker daemon is running on your machine. Then, follow these steps:
+
+1. On the command line, first change to the docs folder: `cd docs`.
+1. Run `make docs`. This launches a preview of the website with the current grafana docs at `http://localhost:3002/docs/grafana/latest/` which will refresh automatically when changes are made to content in the `sources` directory.
+
+If you have the grafana/website repo checked out in the same directory as the grafana repo, then you can run `make docs-local-static` to use local assets (such as images).
+
+---
+
+## Content guidelines
+
+Generally, one can edit content in the `sources` directory.
+
+The following paths are built instead from a typescript file and are auto-generated. Please do not edit these files directly.
+Instead, navigate to the appropriate typescript source file and edit the content there, then follow the build instructions to generate the markdown files.
+
+### Transformations
+
+Auto-generated markdown location:
+
+- docs/sources/panels-visualizations/query-transform-data/transform-data/index.md
+
+Typescript location for editing and instructions:
+
+- scripts/docs/generate-transformations.ts - Includes all content not specific to a transformation.
+- public/app/features/transformers/docs/content.ts - Transformation-specific content.
+
+Only use [reference style links](https://grafana.com/docs/writers-toolkit/write/shortcodes/#docsreference) in the `content.ts` file or else link text will be visible in the UI.
+
+### [Contributing](/contribute/documentation/README.md)
+
+### Using `relref` for internal links
+
+Use the Hugo shortcode [relref](https://gohugo.io/content-management/cross-references/#use-ref-and-relref) any time you are linking to other internal docs pages.
+
+Syntax is:
 
 ```
-git clone https://github.com/grafana/grafana.org
-cd grafana.org
-make docs-build
+{{< relref "example.md" >}}
 ```
 
-**Build the Documentation**:
+You might need to add more context for the link (containing folders and so on, `folder/example.md`) if Hugo says the relref is ambiguous.
 
-Now that the docker image has been prepared we can build the
-grafana docs and start a docs server. 
+### Managing redirects
 
-If you have not cloned the Grafana repository already then:
+When moving content around or removing pages it's important that users following old links are properly redirected to the new location. We do this using the [aliases](https://gohugo.io/content-management/urls/#aliases) feature in Hugo.
 
-```
-cd ..
-git clone https://github.com/grafana/grafana
-```
+If you are moving a page, add an `aliases` entry in the front matter referencing the old location of the page which will redirect the old url to the new location.
 
-Switch your working directory to the directory this file
-(README.md) is in.
+If you are removing a page, add an `aliases` entry in the front matter of the most-applicable page referencing the location of the page being removed.
 
-```
-cd grafana/docs
-```
+If you are copying an existing page as the basis for a new one, be sure to remove any `aliases` entries in the front matter in your copy to avoid conflicting redirects.
 
-An AWS config file is required to build the docs Docker image and to publish the site to AWS. If you are building locally only and do not have any AWS credentials for docs.grafana.org then create an empty file named `awsconfig` in the current directory.
+### Edit the side menu
 
-```
-touch awsconfig
-```
+The side menu is automatically build from the file structure. Use the [weight](https://gohugo.io/templates/lists/#by-weight) front matter parameter to order pages.
 
-Then run (possibly with ``sudo``):
+To specify different menu text from the page title, use the front matter parameter `menuTitle`.
 
-```
-make watch
-```
+### Add images
 
-This command will not return control of the shell to the user. Instead
-the command is now running a new docker container built from the image
-we created in the previous step.
+Please see our help documentation on [Image, diagram, and screenshot guidelines](https://grafana.com/docs/writers-toolkit/writing-guide/image-guidelines/) for comprehensive information.
 
-Open [localhost:3004](http://localhost:3004) to view the docs.
+---
 
-### Images & Content
+## Deploy changes to grafana.com
 
-All markdown files are located in this repo (main grafana repo). But all images are added to the https://github.com/grafana/grafana.org repo. So the process of adding images is a bit complicated. 
+When a PR is merged with changes in the `docs/sources` directory, those changes are automatically synced by a GitHub action (`.github/workflows/publish.yml`) to the grafana/website repo.
 
-First you need create a feature (PR) branch of https://github.com/grafana/grafana.org so you can make change. Then add the image to the `/static/img/docs` directory. Then make a commit that adds the image. 
+- A PR that targets the `main` branch syncs to the `content/docs/grafana/next` directory in the `website` repository, and publishes to `https://grafana.com/docs/grafana/next/`.
+- A PR targeting the `latest/current` release branch syncs to the `content/docs/grafana/latest` directory in the `website` repository, and publishes to `https://grafana.com/docs/grafana/latest/`.
 
-Then run:
-```
-make docs-build
-```
-
-This will rebuild the docs docker container. 
-
-To be able to use the image you have to quit  (CTRL-C) the `make watch` command (that you run in the same directory as this README). Then simply rerun `make watch`, it will restart the docs server but now with access to your image. 
-
-### Editing content
-
-Changes to the markdown files should automatically cause a docs rebuild and live reload should reload the page in your browser. 
+Once the sync is complete, the website will automatically publish to production - no further action is needed.

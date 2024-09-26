@@ -3,36 +3,45 @@ package dtos
 import "github.com/grafana/grafana/pkg/components/simplejson"
 
 type PostAnnotationsCmd struct {
-	DashboardId int64            `json:"dashboardId"`
-	PanelId     int64            `json:"panelId"`
-	Time        int64            `json:"time"`
-	Text        string           `json:"text"`
-	Tags        []string         `json:"tags"`
-	Data        *simplejson.Json `json:"data"`
-	IsRegion    bool             `json:"isRegion"`
-	TimeEnd     int64            `json:"timeEnd"`
+	DashboardId  int64  `json:"dashboardId"`
+	DashboardUID string `json:"dashboardUID,omitempty"`
+	PanelId      int64  `json:"panelId"`
+	Time         int64  `json:"time"`
+	TimeEnd      int64  `json:"timeEnd,omitempty"` // Optional
+	// required: true
+	Text string           `json:"text"`
+	Tags []string         `json:"tags"`
+	Data *simplejson.Json `json:"data"`
 }
 
 type UpdateAnnotationsCmd struct {
-	Id       int64    `json:"id"`
-	Time     int64    `json:"time"`
-	Text     string   `json:"text"`
-	Tags     []string `json:"tags"`
-	IsRegion bool     `json:"isRegion"`
-	TimeEnd  int64    `json:"timeEnd"`
+	Id      int64            `json:"id"`
+	Time    int64            `json:"time"`
+	TimeEnd int64            `json:"timeEnd,omitempty"` // Optional
+	Text    string           `json:"text"`
+	Tags    []string         `json:"tags"`
+	Data    *simplejson.Json `json:"data"`
 }
 
-type DeleteAnnotationsCmd struct {
-	AlertId      int64 `json:"alertId"`
-	DashboardId  int64 `json:"dashboardId"`
-	PanelId      int64 `json:"panelId"`
-	AnnotationId int64 `json:"annotationId"`
-	RegionId     int64 `json:"regionId"`
+type PatchAnnotationsCmd struct {
+	Id      int64            `json:"id"`
+	Time    int64            `json:"time"`
+	TimeEnd int64            `json:"timeEnd,omitempty"` // Optional
+	Text    string           `json:"text"`
+	Tags    []string         `json:"tags"`
+	Data    *simplejson.Json `json:"data"`
+}
+
+type MassDeleteAnnotationsCmd struct {
+	DashboardId  int64  `json:"dashboardId"`
+	PanelId      int64  `json:"panelId"`
+	AnnotationId int64  `json:"annotationId"`
+	DashboardUID string `json:"dashboardUID,omitempty"`
 }
 
 type PostGraphiteAnnotationsCmd struct {
-	When int64       `json:"when"`
-	What string      `json:"what"`
-	Data string      `json:"data"`
-	Tags interface{} `json:"tags"`
+	When int64  `json:"when"`
+	What string `json:"what"`
+	Data string `json:"data"`
+	Tags any    `json:"tags"`
 }

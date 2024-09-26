@@ -1,189 +1,140 @@
 import React, { PureComponent } from 'react';
-import config from 'app/core/config';
-import classNames from 'classnames';
+import { connect, ConnectedProps } from 'react-redux';
 
-import { getAngularLoader, AngularComponent } from 'app/core/services/AngularLoader';
-import { importPluginModule } from 'app/features/plugins/plugin_loader';
+import { StoreState } from 'app/types';
 
-import { AddPanelPanel } from './AddPanelPanel';
-import { getPanelPluginNotFound } from './PanelPluginNotFound';
-import { DashboardRow } from './DashboardRow';
-import { PanelChrome } from './PanelChrome';
-import { PanelEditor } from './PanelEditor';
+import { initPanelState } from '../../panel/state/actions';
+import { setPanelInstanceState } from '../../panel/state/reducers';
+import { DashboardModel, PanelModel } from '../state';
 
-import { PanelModel } from '../panel_model';
-import { DashboardModel } from '../dashboard_model';
-import { PanelPlugin } from 'app/types';
-import { PanelResizer } from './PanelResizer';
+import { LazyLoader } from './LazyLoader';
+import { PanelChromeAngular } from './PanelChromeAngular';
+import { PanelStateWrapper } from './PanelStateWrapper';
 
-export interface Props {
+export interface OwnProps {
   panel: PanelModel;
+  stateKey: string;
   dashboard: DashboardModel;
   isEditing: boolean;
-  isFullscreen: boolean;
+  isViewing: boolean;
+  isDraggable?: boolean;
+  width: number;
+  height: number;
+  lazy?: boolean;
+  timezone?: string;
+  hideMenu?: boolean;
 }
 
-export interface State {
-  plugin: PanelPlugin;
-  angularPanel: AngularComponent;
-}
-
-export class DashboardPanel extends PureComponent<Props, State> {
-  element: HTMLElement;
-  specialPanels = {};
-
-  constructor(props) {
-    super(props);
-
-    this.state = {
-      plugin: null,
-      angularPanel: null,
-    };
-
-    this.specialPanels['row'] = this.renderRow.bind(this);
-    this.specialPanels['add-panel'] = this.renderAddPanel.bind(this);
+const mapStateToProps = (state: StoreState, props: OwnProps) => {
+  const panelState = state.panels[props.stateKey];
+  if (!panelState) {
+    return { plugin: undefined };
   }
 
-  isSpecial(pluginId: string) {
-    return this.specialPanels[pluginId];
-  }
-
-  renderRow() {
-    return <DashboardRow panel={this.props.panel} dashboard={this.props.dashboard} />;
-  }
-
-  renderAddPanel() {
-    return <AddPanelPanel panel={this.props.panel} dashboard={this.props.dashboard} />;
-  }
-
-  onPluginTypeChanged = (plugin: PanelPlugin) => {
-    this.loadPlugin(plugin.id);
+  return {
+    plugin: panelState.plugin,
+    instanceState: panelState.instanceState,
   };
+};
 
-  async loadPlugin(pluginId: string) {
-    if (this.isSpecial(pluginId)) {
-      return;
-    }
+const mapDispatchToProps = {
+  initPanelState,
+  setPanelInstanceState,
+};
 
-    const { panel } = this.props;
+const connector = connect(mapStateToProps, mapDispatchToProps);
 
-    // handle plugin loading & changing of plugin type
-    if (!this.state.plugin || this.state.plugin.id !== pluginId) {
-      const plugin = config.panels[pluginId] || getPanelPluginNotFound(pluginId);
+export type Props = OwnProps & ConnectedProps<typeof connector>;
 
-      // remember if this is from an angular panel
-      const fromAngularPanel = this.state.angularPanel != null;
-
-      // unmount angular panel
-      this.cleanUpAngularPanel();
-
-      if (panel.type !== pluginId) {
-        this.props.panel.changeType(pluginId, fromAngularPanel);
-      }
-
-      if (plugin.exports) {
-        this.setState({ plugin: plugin, angularPanel: null });
-      } else {
-        plugin.exports = await importPluginModule(plugin.module);
-        this.setState({ plugin: plugin, angularPanel: null });
-      }
-    }
-  }
+export class DashboardPanelUnconnected extends PureComponent<Props> {
+  static defaultProps: Partial<Props> = {
+    lazy: true,
+  };
 
   componentDidMount() {
-    this.loadPlugin(this.props.panel.type);
-  }
-
-  componentDidUpdate() {
-    if (!this.element || this.state.angularPanel) {
-      return;
-    }
-
-    const loader = getAngularLoader();
-    const template = '<plugin-component type="panel" class="panel-height-helper"></plugin-component>';
-    const scopeProps = { panel: this.props.panel, dashboard: this.props.dashboard };
-    const angularPanel = loader.load(this.element, scopeProps, template);
-
-    this.setState({ angularPanel });
-  }
-
-  cleanUpAngularPanel() {
-    if (this.state.angularPanel) {
-      this.state.angularPanel.destroy();
-      this.element = null;
+    this.props.panel.isInView = !this.props.lazy;
+    if (!this.props.lazy) {
+      this.onPanelLoad();
     }
   }
 
-  componentWillUnmount() {
-    this.cleanUpAngularPanel();
-  }
-
-  onMouseEnter = () => {
-    this.props.dashboard.setPanelFocus(this.props.panel.id);
+  onInstanceStateChange = (value: unknown) => {
+    this.props.setPanelInstanceState({ key: this.props.stateKey, value });
   };
 
-  onMouseLeave = () => {
-    this.props.dashboard.setPanelFocus(0);
+  onVisibilityChange = (v: boolean) => {
+    this.props.panel.isInView = v;
   };
 
-  renderReactPanel() {
-    const { dashboard, panel } = this.props;
-    const { plugin } = this.state;
-
-    return <PanelChrome plugin={plugin} panel={panel} dashboard={dashboard} />;
-  }
-
-  renderAngularPanel() {
-    return <div ref={element => (this.element = element)} className="panel-height-helper" />;
-  }
-
-  render() {
-    const { panel, dashboard, isFullscreen, isEditing } = this.props;
-    const { plugin, angularPanel } = this.state;
-
-    if (this.isSpecial(panel.type)) {
-      return this.specialPanels[panel.type]();
+  onPanelLoad = () => {
+    if (!this.props.plugin) {
+      this.props.initPanelState(this.props.panel);
     }
+  };
 
-    // if we have not loaded plugin exports yet, wait
-    if (!plugin || !plugin.exports) {
+  renderPanel = ({ isInView }: { isInView: boolean }) => {
+    const {
+      dashboard,
+      panel,
+      isViewing,
+      isEditing,
+      width,
+      height,
+      plugin,
+      timezone,
+      hideMenu,
+      isDraggable = true,
+    } = this.props;
+
+    if (!plugin) {
       return null;
     }
 
-    const containerClass = classNames({ 'panel-editor-container': isEditing, 'panel-height-helper': !isEditing });
-    const panelWrapperClass = classNames({
-      'panel-wrapper': true,
-      'panel-wrapper--edit': isEditing,
-      'panel-wrapper--view': isFullscreen && !isEditing,
-    });
+    if (plugin && plugin.angularPanelCtrl) {
+      return (
+        <PanelChromeAngular
+          plugin={plugin}
+          panel={panel}
+          dashboard={dashboard}
+          isViewing={isViewing}
+          isEditing={isEditing}
+          isInView={isInView}
+          isDraggable={isDraggable}
+          width={width}
+          height={height}
+        />
+      );
+    }
 
     return (
-      <div className={containerClass}>
-        <PanelResizer
-          isEditing={isEditing}
-          panel={panel}
-          render={styles => (
-            <div
-              className={panelWrapperClass}
-              onMouseEnter={this.onMouseEnter}
-              onMouseLeave={this.onMouseLeave}
-              style={styles}
-            >
-              {plugin.exports.Panel && this.renderReactPanel()}
-              {plugin.exports.PanelCtrl && this.renderAngularPanel()}
-            </div>
-          )}
-        />
-        {panel.isEditing && (
-          <PanelEditor
-            panel={panel}
-            plugin={plugin}
-            dashboard={dashboard}
-            angularPanel={angularPanel}
-            onTypeChanged={this.onPluginTypeChanged}
-          />
-        )}
-      </div>
+      <PanelStateWrapper
+        plugin={plugin}
+        panel={panel}
+        dashboard={dashboard}
+        isViewing={isViewing}
+        isEditing={isEditing}
+        isInView={isInView}
+        isDraggable={isDraggable}
+        width={width}
+        height={height}
+        onInstanceStateChange={this.onInstanceStateChange}
+        timezone={timezone}
+        hideMenu={hideMenu}
+      />
+    );
+  };
+
+  render() {
+    const { width, height, lazy } = this.props;
+
+    return lazy ? (
+      <LazyLoader width={width} height={height} onChange={this.onVisibilityChange} onLoad={this.onPanelLoad}>
+        {this.renderPanel}
+      </LazyLoader>
+    ) : (
+      this.renderPanel({ isInView: true })
     );
   }
 }
+
+export const DashboardPanel = connector(DashboardPanelUnconnected);

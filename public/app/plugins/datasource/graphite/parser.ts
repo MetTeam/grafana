@@ -1,30 +1,40 @@
 import { Lexer } from './lexer';
+import { GraphiteParserError } from './types';
+import { isGraphiteParserError } from './utils';
 
-export function Parser(this: any, expression) {
-  this.expression = expression;
-  this.lexer = new Lexer(expression);
-  this.tokens = this.lexer.tokenize();
-  this.index = 0;
-}
+export class Parser {
+  expression: string;
+  lexer: Lexer;
+  tokens: AstNode[];
+  index: number;
 
-Parser.prototype = {
-  getAst: function() {
+  constructor(expression: string) {
+    this.expression = expression;
+    this.lexer = new Lexer(expression);
+    this.tokens = this.lexer.tokenize();
+    this.index = 0;
+  }
+
+  getAst() {
     return this.start();
-  },
+  }
 
-  start: function() {
+  start(): AstNode | null {
     try {
       return this.functionCall() || this.metricExpression();
     } catch (e) {
-      return {
-        type: 'error',
-        message: e.message,
-        pos: e.pos,
-      };
+      if (isGraphiteParserError(e)) {
+        return {
+          type: 'error',
+          message: e.message,
+          pos: e.pos,
+        };
+      }
     }
-  },
+    return null;
+  }
 
-  curlyBraceSegment: function() {
+  curlyBraceSegment(): AstNode | null {
     if (this.match('identifier', '{') || this.match('{')) {
       let curlySegment = '';
 
@@ -51,17 +61,18 @@ Parser.prototype = {
     } else {
       return null;
     }
-  },
+  }
 
-  metricSegment: function() {
+  metricSegment(): AstNode | null {
     const curly = this.curlyBraceSegment();
     if (curly) {
       return curly;
     }
 
-    if (this.match('identifier') || this.match('number')) {
+    if (this.match('identifier') || this.match('number') || this.match('bool')) {
       // hack to handle float numbers in metric segments
-      const parts = this.consumeToken().value.split('.');
+      const tokenValue = this.consumeToken().value;
+      const parts = tokenValue && typeof tokenValue === 'string' ? tokenValue.split('.') : '';
       if (parts.length === 2) {
         this.tokens.splice(this.index, 0, { type: '.' });
         this.tokens.splice(this.index + 1, 0, {
@@ -97,19 +108,23 @@ Parser.prototype = {
 
     this.consumeToken();
     return node;
-  },
+  }
 
-  metricExpression: function() {
+  metricExpression(): AstNode | null {
     if (!this.match('templateStart') && !this.match('identifier') && !this.match('number') && !this.match('{')) {
       return null;
     }
 
-    const node = {
+    const node: AstNode = {
       type: 'metric',
       segments: [],
     };
 
-    node.segments.push(this.metricSegment());
+    const segments = this.metricSegment();
+
+    if (node.segments && segments) {
+      node.segments.push(segments);
+    }
 
     while (this.match('.')) {
       this.consumeToken();
@@ -118,21 +133,28 @@ Parser.prototype = {
       if (!segment) {
         this.errorMark('Expected metric identifier');
       }
-
-      node.segments.push(segment);
+      if (node.segments && segment) {
+        node.segments.push(segment);
+      }
     }
 
     return node;
-  },
+  }
 
-  functionCall: function() {
+  functionCall(): AstNode | null {
     if (!this.match('identifier', '(')) {
       return null;
     }
 
-    const node: any = {
+    let name = '';
+    const token = this.consumeToken();
+    if (typeof token.value === 'string') {
+      name = token.value;
+    }
+
+    const node: AstNode = {
       type: 'function',
-      name: this.consumeToken().value,
+      name: name,
     };
 
     // consume left parenthesis
@@ -147,9 +169,9 @@ Parser.prototype = {
     this.consumeToken();
 
     return node;
-  },
+  }
 
-  boolExpression: function() {
+  boolExpression(): AstNode | null {
     if (!this.match('bool')) {
       return null;
     }
@@ -158,9 +180,9 @@ Parser.prototype = {
       type: 'bool',
       value: this.consumeToken().value === 'true',
     };
-  },
+  }
 
-  functionParameters: function() {
+  functionParameters(): AstNode[] | [] {
     if (this.match(')') || this.match('')) {
       return [];
     }
@@ -173,21 +195,25 @@ Parser.prototype = {
       this.metricExpression() ||
       this.stringLiteral();
 
-    if (!this.match(',')) {
+    if (!this.match(',') && param) {
       return [param];
     }
 
     this.consumeToken();
-    return [param].concat(this.functionParameters());
-  },
 
-  seriesRefExpression: function() {
+    if (param) {
+      return [param].concat(this.functionParameters());
+    }
+    return [];
+  }
+
+  seriesRefExpression(): AstNode | null {
     if (!this.match('identifier')) {
       return null;
     }
 
     const value = this.tokens[this.index].value;
-    if (!value.match(/\#[A-Z]/)) {
+    if (value && typeof value === 'string' && !value.match(/\#[A-Z]/)) {
       return null;
     }
 
@@ -197,56 +223,77 @@ Parser.prototype = {
       type: 'series-ref',
       value: token.value,
     };
-  },
+  }
 
-  numericLiteral: function() {
+  numericLiteral(): AstNode | null {
     if (!this.match('number')) {
       return null;
     }
 
-    return {
-      type: 'number',
-      value: parseFloat(this.consumeToken().value),
-    };
-  },
+    const token = this.consumeToken();
+    if (token && token.value && typeof token.value === 'string') {
+      return {
+        type: 'number',
+        value: parseFloat(token.value),
+      };
+    }
+    return null;
+  }
 
-  stringLiteral: function() {
+  stringLiteral(): AstNode | null {
     if (!this.match('string')) {
       return null;
     }
 
     const token = this.consumeToken();
-    if (token.isUnclosed) {
-      throw { message: 'Unclosed string parameter', pos: token.pos };
+    if (token.isUnclosed && token.pos) {
+      const error: GraphiteParserError = {
+        message: 'Unclosed string parameter',
+        pos: token.pos,
+      };
+      throw error;
     }
 
     return {
       type: 'string',
       value: token.value,
     };
-  },
+  }
 
-  errorMark: function(text) {
+  errorMark(text: string) {
     const currentToken = this.tokens[this.index];
     const type = currentToken ? currentToken.type : 'end of string';
-    throw {
+    const error: GraphiteParserError = {
       message: text + ' instead found ' + type,
-      pos: currentToken ? currentToken.pos : this.lexer.char,
+      pos: currentToken && currentToken.pos ? currentToken.pos : this.lexer.char,
     };
-  },
+    throw error;
+  }
 
   // returns token value and incre
-  consumeToken: function() {
+  consumeToken() {
     this.index++;
     return this.tokens[this.index - 1];
-  },
+  }
 
-  matchToken: function(type, index) {
+  matchToken(type: string, index: number) {
     const token = this.tokens[this.index + index];
     return (token === undefined && type === '') || (token && token.type === type);
-  },
+  }
 
-  match: function(token1, token2) {
+  match(token1: string, token2?: string) {
     return this.matchToken(token1, 0) && (!token2 || this.matchToken(token2, 1));
-  },
+  }
+}
+
+// Next steps, need to make this applicable to types in graphite_query.ts
+export type AstNode = {
+  type: string;
+  name?: string;
+  params?: AstNode[];
+  value?: string | number | boolean;
+  segments?: AstNode[];
+  message?: string;
+  pos?: number;
+  isUnclosed?: boolean;
 };

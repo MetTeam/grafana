@@ -1,26 +1,41 @@
 package notifications
 
 import (
-	m "github.com/grafana/grafana/pkg/models"
+	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/setting"
 )
 
-type Message struct {
-	To           []string
-	From         string
-	Subject      string
-	Body         string
-	Info         string
-	EmbededFiles []string
+// AttachedFile struct represents email attached files.
+type AttachedFile struct {
+	Name    string
+	Content []byte
 }
 
-func setDefaultTemplateData(data map[string]interface{}, u *m.User) {
+// Message is representation of the email message.
+type Message struct {
+	To            []string
+	SingleEmail   bool
+	From          string
+	Subject       string
+	Body          map[string]string
+	Info          string
+	ReplyTo       []string
+	EmbeddedFiles []string
+	AttachedFiles []*AttachedFile
+}
+
+func setDefaultTemplateData(cfg *setting.Cfg, data map[string]any, u *user.User) {
 	data["AppUrl"] = setting.AppUrl
 	data["BuildVersion"] = setting.BuildVersion
 	data["BuildStamp"] = setting.BuildStamp
-	data["EmailCodeValidHours"] = setting.EmailCodeValidMinutes / 60
-	data["Subject"] = map[string]interface{}{}
+	data["EmailCodeValidHours"] = cfg.EmailCodeValidMinutes / 60
+	data["Subject"] = map[string]any{}
 	if u != nil {
 		data["Name"] = u.NameOrFallback()
 	}
+	dataCopy := map[string]any{}
+	for k, v := range data {
+		dataCopy[k] = v
+	}
+	data["TemplateData"] = dataCopy
 }

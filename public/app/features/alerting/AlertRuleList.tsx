@@ -1,35 +1,52 @@
 import React, { PureComponent } from 'react';
-import { hot } from 'react-hot-loader';
-import { connect } from 'react-redux';
-import PageHeader from 'app/core/components/PageHeader/PageHeader';
-import AlertRuleItem from './AlertRuleItem';
+import { connect, ConnectedProps } from 'react-redux';
+
+import { SelectableValue } from '@grafana/data';
+import { config, locationService } from '@grafana/runtime';
+import { Button, FilterInput, LinkButton, Select, VerticalGroup } from '@grafana/ui';
 import appEvents from 'app/core/app_events';
-import { updateLocation } from 'app/core/actions';
-import { getNavModel } from 'app/core/selectors/navModel';
-import { NavModel, StoreState, AlertRule } from 'app/types';
-import { getAlertRulesAsync, setSearchQuery, togglePauseAlertRule } from './state/actions';
+import { Page } from 'app/core/components/Page/Page';
+import { GrafanaRouteComponentProps } from 'app/core/navigation/types';
+import { AlertRule, StoreState } from 'app/types';
+
+import { ShowModalReactEvent } from '../../types/events';
+
+import { AlertHowToModal } from './AlertHowToModal';
+import AlertRuleItem from './AlertRuleItem';
+import { DeprecationNotice } from './components/DeprecationNotice';
+import { getAlertRulesAsync, togglePauseAlertRule } from './state/actions';
+import { setSearchQuery } from './state/reducers';
 import { getAlertRuleItems, getSearchQuery } from './state/selectors';
 
-export interface Props {
-  navModel: NavModel;
-  alertRules: AlertRule[];
-  updateLocation: typeof updateLocation;
-  getAlertRulesAsync: typeof getAlertRulesAsync;
-  setSearchQuery: typeof setSearchQuery;
-  togglePauseAlertRule: typeof togglePauseAlertRule;
-  stateFilter: string;
-  search: string;
+function mapStateToProps(state: StoreState) {
+  return {
+    alertRules: getAlertRuleItems(state),
+    search: getSearchQuery(state.alertRules),
+    isLoading: state.alertRules.isLoading,
+  };
 }
 
-export class AlertRuleList extends PureComponent<Props, any> {
+const mapDispatchToProps = {
+  getAlertRulesAsync,
+  setSearchQuery,
+  togglePauseAlertRule,
+};
+
+const connector = connect(mapStateToProps, mapDispatchToProps);
+
+interface OwnProps extends GrafanaRouteComponentProps<{}, { state: string }> {}
+
+export type Props = OwnProps & ConnectedProps<typeof connector>;
+
+export class AlertRuleListUnconnected extends PureComponent<Props> {
   stateFilters = [
-    { text: 'All', value: 'all' },
-    { text: 'OK', value: 'ok' },
-    { text: 'Not OK', value: 'not_ok' },
-    { text: 'Alerting', value: 'alerting' },
-    { text: 'No Data', value: 'no_data' },
-    { text: 'Paused', value: 'paused' },
-    { text: 'Pending', value: 'pending' },
+    { label: 'All', value: 'all' },
+    { label: 'OK', value: 'ok' },
+    { label: 'Not OK', value: 'not_ok' },
+    { label: 'Alerting', value: 'alerting' },
+    { label: 'No data', value: 'no_data' },
+    { label: 'Paused', value: 'paused' },
+    { label: 'Pending', value: 'pending' },
   ];
 
   componentDidMount() {
@@ -37,7 +54,7 @@ export class AlertRuleList extends PureComponent<Props, any> {
   }
 
   componentDidUpdate(prevProps: Props) {
-    if (prevProps.stateFilter !== this.props.stateFilter) {
+    if (prevProps.queryParams.state !== this.props.queryParams.state) {
       this.fetchRules();
     }
   }
@@ -47,29 +64,18 @@ export class AlertRuleList extends PureComponent<Props, any> {
   }
 
   getStateFilter(): string {
-    const { stateFilter } = this.props;
-    if (stateFilter) {
-      return stateFilter.toString();
-    }
-    return 'all';
+    return this.props.queryParams.state ?? 'all';
   }
 
-  onStateFilterChanged = event => {
-    this.props.updateLocation({
-      query: { state: event.target.value },
-    });
+  onStateFilterChanged = (option: SelectableValue) => {
+    locationService.partial({ state: option.value });
   };
 
   onOpenHowTo = () => {
-    appEvents.emit('show-modal', {
-      src: 'public/app/features/alerting/partials/alert_howto.html',
-      modalClass: 'confirm-modal',
-      model: {},
-    });
+    appEvents.publish(new ShowModalReactEvent({ component: AlertHowToModal }));
   };
 
-  onSearchQueryChange = event => {
-    const { value } = event.target;
+  onSearchQueryChange = (value: string) => {
     this.props.setSearchQuery(value);
   };
 
@@ -77,7 +83,7 @@ export class AlertRuleList extends PureComponent<Props, any> {
     this.props.togglePauseAlertRule(rule.id, { paused: rule.state !== 'paused' });
   };
 
-  alertStateFilterOption = ({ text, value }) => {
+  alertStateFilterOption = ({ text, value }: { text: string; value: string }) => {
     return (
       <option key={value} value={value}>
         {text}
@@ -86,69 +92,56 @@ export class AlertRuleList extends PureComponent<Props, any> {
   };
 
   render() {
-    const { navModel, alertRules, search } = this.props;
+    const { alertRules, search, isLoading } = this.props;
 
     return (
-      <div>
-        <PageHeader model={navModel} />
-        <div className="page-container page-body">
+      <Page navId="alert-list-legacy">
+        <Page.Contents isLoading={isLoading}>
           <div className="page-action-bar">
             <div className="gf-form gf-form--grow">
-              <label className="gf-form--has-input-icon gf-form--grow">
-                <input
-                  type="text"
-                  className="gf-form-input"
-                  placeholder="Search alerts"
-                  value={search}
-                  onChange={this.onSearchQueryChange}
-                />
-                <i className="gf-form-input-icon fa fa-search" />
-              </label>
+              <FilterInput placeholder="Search alerts" value={search} onChange={this.onSearchQueryChange} />
             </div>
             <div className="gf-form">
-              <label className="gf-form-label">States</label>
+              <label className="gf-form-label" htmlFor="alert-state-filter">
+                States
+              </label>
 
-              <div className="gf-form-select-wrapper width-13">
-                <select className="gf-form-input" onChange={this.onStateFilterChanged} value={this.getStateFilter()}>
-                  {this.stateFilters.map(this.alertStateFilterOption)}
-                </select>
+              <div className="width-13">
+                <Select
+                  inputId={'alert-state-filter'}
+                  options={this.stateFilters}
+                  onChange={this.onStateFilterChanged}
+                  value={this.getStateFilter()}
+                />
               </div>
             </div>
             <div className="page-action-bar__spacer" />
-            <a className="btn btn-secondary" onClick={this.onOpenHowTo}>
-              <i className="fa fa-info-circle" /> How to add an alert
-            </a>
+            {config.unifiedAlertingEnabled && (
+              <LinkButton variant="primary" href="alerting-legacy/ng/new">
+                Add NG Alert
+              </LinkButton>
+            )}
+            <Button variant="secondary" onClick={this.onOpenHowTo}>
+              How to add an alert
+            </Button>
           </div>
-          <section>
-            <ol className="alert-rule-list">
-              {alertRules.map(rule => (
+          <DeprecationNotice />
+          <VerticalGroup spacing="none">
+            {alertRules.map((rule) => {
+              return (
                 <AlertRuleItem
                   rule={rule}
                   key={rule.id}
                   search={search}
                   onTogglePause={() => this.onTogglePause(rule)}
                 />
-              ))}
-            </ol>
-          </section>
-        </div>
-      </div>
+              );
+            })}
+          </VerticalGroup>
+        </Page.Contents>
+      </Page>
     );
   }
 }
 
-const mapStateToProps = (state: StoreState) => ({
-  navModel: getNavModel(state.navIndex, 'alert-list'),
-  alertRules: getAlertRuleItems(state.alertRules),
-  stateFilter: state.location.query.state,
-  search: getSearchQuery(state.alertRules),
-});
-
-const mapDispatchToProps = {
-  updateLocation,
-  getAlertRulesAsync,
-  setSearchQuery,
-  togglePauseAlertRule,
-};
-
-export default hot(module)(connect(mapStateToProps, mapDispatchToProps)(AlertRuleList));
+export default connector(AlertRuleListUnconnected);

@@ -1,10 +1,13 @@
 export interface AppNotification {
-  id?: number;
+  id: string;
   severity: AppNotificationSeverity;
   icon: string;
   title: string;
   text: string;
-  timeout: AppNotificationTimeout;
+  traceId?: string;
+  component?: React.ReactElement;
+  showing: boolean;
+  timestamp: number;
 }
 
 export enum AppNotificationSeverity {
@@ -15,11 +18,19 @@ export enum AppNotificationSeverity {
 }
 
 export enum AppNotificationTimeout {
-  Warning = 5000,
   Success = 3000,
+  Warning = 5000,
   Error = 7000,
 }
 
+export const timeoutMap = {
+  [AppNotificationSeverity.Success]: AppNotificationTimeout.Success,
+  [AppNotificationSeverity.Warning]: AppNotificationTimeout.Warning,
+  [AppNotificationSeverity.Error]: AppNotificationTimeout.Error,
+  [AppNotificationSeverity.Info]: AppNotificationTimeout.Success,
+};
+
 export interface AppNotificationsState {
-  appNotifications: AppNotification[];
+  byId: Record<string, AppNotification>;
+  lastRead: number;
 }

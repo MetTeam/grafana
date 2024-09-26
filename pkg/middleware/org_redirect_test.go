@@ -1,61 +1,65 @@
 package middleware
 
 import (
+	"fmt"
 	"testing"
 
-	"fmt"
+	"github.com/stretchr/testify/require"
 
-	"github.com/grafana/grafana/pkg/bus"
-	m "github.com/grafana/grafana/pkg/models"
-	"github.com/grafana/grafana/pkg/services/session"
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/grafana/grafana/pkg/services/authn"
 )
 
 func TestOrgRedirectMiddleware(t *testing.T) {
+	testCases := []struct {
+		desc        string
+		input       string
+		expStatus   int
+		expLocation string
+	}{
+		{
+			desc:        "when setting a correct org for the user",
+			input:       "/?orgId=3",
+			expStatus:   302,
+			expLocation: "/?orgId=3",
+		},
+		{
+			desc:        "when setting a correct org for the user with '&kiosk'",
+			input:       "/?orgId=3&kiosk",
+			expStatus:   302,
+			expLocation: "/?orgId=3&kiosk",
+		},
+		{
+			desc:        "when setting a correct org for the user with '&kiosk=",
+			input:       "/?kiosk=&orgId=3",
+			expStatus:   302,
+			expLocation: "/?orgId=3&kiosk",
+		},
+		{
+			desc:        "when setting a correct org for the user with '&kiosk=tv'",
+			input:       "/?kiosk=tv&orgId=3",
+			expStatus:   302,
+			expLocation: "/?kiosk=tv&orgId=3",
+		},
+	}
 
-	Convey("Can redirect to correct org", t, func() {
-		middlewareScenario("when setting a correct org for the user", func(sc *scenarioContext) {
-			sc.fakeReq("GET", "/").handler(func(c *m.ReqContext) {
-				c.Session.Set(session.SESS_KEY_USERID, int64(12))
-			}).exec()
-
-			bus.AddHandler("test", func(query *m.SetUsingOrgCommand) error {
-				return nil
-			})
-
-			bus.AddHandler("test", func(query *m.GetSignedInUserQuery) error {
-				query.Result = &m.SignedInUser{OrgId: 1, UserId: 12}
-				return nil
-			})
-
+	for _, tc := range testCases {
+		middlewareScenario(t, tc.desc, func(t *testing.T, sc *scenarioContext) {
+			sc.withIdentity(&authn.Identity{})
 			sc.m.Get("/", sc.defaultHandler)
-			sc.fakeReq("GET", "/?orgId=3").exec()
+			sc.fakeReq("GET", tc.input).exec()
 
-			Convey("change org and redirect", func() {
-				So(sc.resp.Code, ShouldEqual, 302)
-			})
+			require.Equal(t, tc.expStatus, sc.resp.Code)
+			require.Equal(t, tc.expLocation, sc.resp.Header().Get("Location"))
 		})
+	}
 
-		middlewareScenario("when setting an invalid org for user", func(sc *scenarioContext) {
-			sc.fakeReq("GET", "/").handler(func(c *m.ReqContext) {
-				c.Session.Set(session.SESS_KEY_USERID, int64(12))
-			}).exec()
+	middlewareScenario(t, "when setting an invalid org for user", func(t *testing.T, sc *scenarioContext) {
+		sc.withIdentity(&authn.Identity{})
+		sc.userService.ExpectedSetUsingOrgError = fmt.Errorf("")
 
-			bus.AddHandler("test", func(query *m.SetUsingOrgCommand) error {
-				return fmt.Errorf("")
-			})
+		sc.m.Get("/", sc.defaultHandler)
+		sc.fakeReq("GET", "/?orgId=1").exec()
 
-			bus.AddHandler("test", func(query *m.GetSignedInUserQuery) error {
-				query.Result = &m.SignedInUser{OrgId: 1, UserId: 12}
-				return nil
-			})
-
-			sc.m.Get("/", sc.defaultHandler)
-			sc.fakeReq("GET", "/?orgId=3").exec()
-
-			Convey("not allowed to change org", func() {
-				So(sc.resp.Code, ShouldEqual, 404)
-			})
-		})
+		require.Equal(t, 404, sc.resp.Code)
 	})
 }

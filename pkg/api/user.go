@@ -1,165 +1,377 @@
 package api
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
 	"github.com/grafana/grafana/pkg/api/dtos"
-	"github.com/grafana/grafana/pkg/bus"
-	m "github.com/grafana/grafana/pkg/models"
-	"github.com/grafana/grafana/pkg/setting"
+	"github.com/grafana/grafana/pkg/api/response"
+	"github.com/grafana/grafana/pkg/services/auth/identity"
+	contextmodel "github.com/grafana/grafana/pkg/services/contexthandler/model"
+	"github.com/grafana/grafana/pkg/services/login"
+	"github.com/grafana/grafana/pkg/services/org"
+	"github.com/grafana/grafana/pkg/services/team"
+	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/util"
+	"github.com/grafana/grafana/pkg/web"
 )
 
-// GET /api/user  (current authenticated user)
-func GetSignedInUser(c *m.ReqContext) Response {
-	return getUserUserProfile(c.UserId)
+// swagger:route GET /user signed_in_user getSignedInUser
+//
+// Get (current authenticated user)
+//
+// Responses:
+// 200: userResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 404: notFoundError
+// 500: internalServerError
+func (hs *HTTPServer) GetSignedInUser(c *contextmodel.ReqContext) response.Response {
+	userID, errResponse := getUserID(c)
+	if errResponse != nil {
+		return errResponse
+	}
+	return hs.getUserUserProfile(c, userID)
 }
 
-// GET /api/users/:id
-func GetUserByID(c *m.ReqContext) Response {
-	return getUserUserProfile(c.ParamsInt64(":id"))
+// swagger:route GET /users/{user_id} users getUserByID
+//
+// Get user by id.
+//
+// Responses:
+// 200: userResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 404: notFoundError
+// 500: internalServerError
+func (hs *HTTPServer) GetUserByID(c *contextmodel.ReqContext) response.Response {
+	id, err := strconv.ParseInt(web.Params(c.Req)[":id"], 10, 64)
+	if err != nil {
+		return response.Error(http.StatusBadRequest, "id is invalid", err)
+	}
+	return hs.getUserUserProfile(c, id)
 }
 
-func getUserUserProfile(userID int64) Response {
-	query := m.GetUserProfileQuery{UserId: userID}
+func (hs *HTTPServer) getUserUserProfile(c *contextmodel.ReqContext, userID int64) response.Response {
+	query := user.GetUserProfileQuery{UserID: userID}
 
-	if err := bus.Dispatch(&query); err != nil {
-		if err == m.ErrUserNotFound {
-			return Error(404, m.ErrUserNotFound.Error(), nil)
+	userProfile, err := hs.userService.GetProfile(c.Req.Context(), &query)
+	if err != nil {
+		if errors.Is(err, user.ErrUserNotFound) {
+			return response.Error(404, user.ErrUserNotFound.Error(), nil)
 		}
-		return Error(500, "Failed to get user", err)
+		return response.Error(500, "Failed to get user", err)
 	}
 
-	return JSON(200, query.Result)
+	getAuthQuery := login.GetAuthInfoQuery{UserId: userID}
+	userProfile.AuthLabels = []string{}
+	if authInfo, err := hs.authInfoService.GetAuthInfo(c.Req.Context(), &getAuthQuery); err == nil {
+		authLabel := login.GetAuthProviderLabel(authInfo.AuthModule)
+		userProfile.AuthLabels = append(userProfile.AuthLabels, authLabel)
+		userProfile.IsExternal = true
+
+		oauthInfo := hs.SocialService.GetOAuthInfoProvider(authInfo.AuthModule)
+		userProfile.IsExternallySynced = login.IsExternallySynced(hs.Cfg, authInfo.AuthModule, oauthInfo)
+		userProfile.IsGrafanaAdminExternallySynced = login.IsGrafanaAdminExternallySynced(hs.Cfg, oauthInfo, authInfo.AuthModule)
+	}
+
+	userProfile.AccessControl = hs.getAccessControlMetadata(c, c.SignedInUser.GetOrgID(), "global.users:id:", strconv.FormatInt(userID, 10))
+	userProfile.AvatarURL = dtos.GetGravatarUrl(userProfile.Email)
+
+	return response.JSON(http.StatusOK, userProfile)
 }
 
-// GET /api/users/lookup
-func GetUserByLoginOrEmail(c *m.ReqContext) Response {
-	query := m.GetUserByLoginQuery{LoginOrEmail: c.Query("loginOrEmail")}
-	if err := bus.Dispatch(&query); err != nil {
-		if err == m.ErrUserNotFound {
-			return Error(404, m.ErrUserNotFound.Error(), nil)
+// swagger:route GET /users/lookup users getUserByLoginOrEmail
+//
+// Get user by login or email.
+//
+// Responses:
+// 200: userResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 404: notFoundError
+// 500: internalServerError
+func (hs *HTTPServer) GetUserByLoginOrEmail(c *contextmodel.ReqContext) response.Response {
+	query := user.GetUserByLoginQuery{LoginOrEmail: c.Query("loginOrEmail")}
+	usr, err := hs.userService.GetByLogin(c.Req.Context(), &query)
+	if err != nil {
+		if errors.Is(err, user.ErrUserNotFound) {
+			return response.Error(404, user.ErrUserNotFound.Error(), nil)
 		}
-		return Error(500, "Failed to get user", err)
+		return response.Error(500, "Failed to get user", err)
 	}
-	user := query.Result
-	result := m.UserProfileDTO{
-		Id:             user.Id,
-		Name:           user.Name,
-		Email:          user.Email,
-		Login:          user.Login,
-		Theme:          user.Theme,
-		IsGrafanaAdmin: user.IsAdmin,
-		OrgId:          user.OrgId,
+	result := user.UserProfileDTO{
+		ID:             usr.ID,
+		Name:           usr.Name,
+		Email:          usr.Email,
+		Login:          usr.Login,
+		Theme:          usr.Theme,
+		IsGrafanaAdmin: usr.IsAdmin,
+		OrgID:          usr.OrgID,
+		UpdatedAt:      usr.Updated,
+		CreatedAt:      usr.Created,
 	}
-	return JSON(200, &result)
+	return response.JSON(http.StatusOK, &result)
 }
 
-// POST /api/user
-func UpdateSignedInUser(c *m.ReqContext, cmd m.UpdateUserCommand) Response {
-	if setting.AuthProxyEnabled {
-		if setting.AuthProxyHeaderProperty == "email" && cmd.Email != c.Email {
-			return Error(400, "Not allowed to change email when auth proxy is using email property", nil)
+// swagger:route PUT /user signed_in_user updateSignedInUser
+//
+// Update signed in User.
+//
+// Responses:
+// 200: okResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 500: internalServerError
+func (hs *HTTPServer) UpdateSignedInUser(c *contextmodel.ReqContext) response.Response {
+	cmd := user.UpdateUserCommand{}
+	var err error
+	if err = web.Bind(c.Req, &cmd); err != nil {
+		return response.Error(http.StatusBadRequest, "bad request data", err)
+	}
+
+	cmd.Email = strings.TrimSpace(cmd.Email)
+	cmd.Login = strings.TrimSpace(cmd.Login)
+
+	userID, errResponse := getUserID(c)
+	if errResponse != nil {
+		return errResponse
+	}
+
+	if hs.Cfg.AuthProxyEnabled {
+		if hs.Cfg.AuthProxyHeaderProperty == "email" && cmd.Email != c.SignedInUser.GetEmail() {
+			return response.Error(http.StatusBadRequest, "Not allowed to change email when auth proxy is using email property", nil)
 		}
-		if setting.AuthProxyHeaderProperty == "username" && cmd.Login != c.Login {
-			return Error(400, "Not allowed to change username when auth proxy is using username property", nil)
+		if hs.Cfg.AuthProxyHeaderProperty == "username" && cmd.Login != c.SignedInUser.GetLogin() {
+			return response.Error(http.StatusBadRequest, "Not allowed to change username when auth proxy is using username property", nil)
 		}
 	}
-	cmd.UserId = c.UserId
-	return handleUpdateUser(cmd)
+
+	cmd.UserID = userID
+	return hs.handleUpdateUser(c.Req.Context(), cmd)
 }
 
-// POST /api/users/:id
-func UpdateUser(c *m.ReqContext, cmd m.UpdateUserCommand) Response {
-	cmd.UserId = c.ParamsInt64(":id")
-	return handleUpdateUser(cmd)
-}
-
-//POST /api/users/:id/using/:orgId
-func UpdateUserActiveOrg(c *m.ReqContext) Response {
-	userID := c.ParamsInt64(":id")
-	orgID := c.ParamsInt64(":orgId")
-
-	if !validateUsingOrg(userID, orgID) {
-		return Error(401, "Not a valid organization", nil)
+// swagger:route PUT /users/{user_id} users updateUser
+//
+// Update user.
+//
+// Update the user identified by id.
+//
+// Responses:
+// 200: okResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 404: notFoundError
+// 500: internalServerError
+func (hs *HTTPServer) UpdateUser(c *contextmodel.ReqContext) response.Response {
+	cmd := user.UpdateUserCommand{}
+	var err error
+	if err = web.Bind(c.Req, &cmd); err != nil {
+		return response.Error(http.StatusBadRequest, "bad request data", err)
 	}
 
-	cmd := m.SetUsingOrgCommand{UserId: userID, OrgId: orgID}
+	cmd.Email = strings.TrimSpace(cmd.Email)
+	cmd.Login = strings.TrimSpace(cmd.Login)
 
-	if err := bus.Dispatch(&cmd); err != nil {
-		return Error(500, "Failed to change active organization", err)
+	cmd.UserID, err = strconv.ParseInt(web.Params(c.Req)[":id"], 10, 64)
+	if err != nil {
+		return response.Error(http.StatusBadRequest, "id is invalid", err)
 	}
 
-	return Success("Active organization changed")
+	return hs.handleUpdateUser(c.Req.Context(), cmd)
 }
 
-func handleUpdateUser(cmd m.UpdateUserCommand) Response {
+// POST /api/users/:id/using/:orgId
+func (hs *HTTPServer) UpdateUserActiveOrg(c *contextmodel.ReqContext) response.Response {
+	userID, err := strconv.ParseInt(web.Params(c.Req)[":id"], 10, 64)
+	if err != nil {
+		return response.Error(http.StatusBadRequest, "id is invalid", err)
+	}
+	orgID, err := strconv.ParseInt(web.Params(c.Req)[":orgId"], 10, 64)
+	if err != nil {
+		return response.Error(http.StatusBadRequest, "orgId is invalid", err)
+	}
+
+	if !hs.validateUsingOrg(c.Req.Context(), userID, orgID) {
+		return response.Error(401, "Not a valid organization", nil)
+	}
+
+	cmd := user.SetUsingOrgCommand{UserID: userID, OrgID: orgID}
+
+	if err := hs.userService.SetUsingOrg(c.Req.Context(), &cmd); err != nil {
+		return response.Error(500, "Failed to change active organization", err)
+	}
+
+	return response.Success("Active organization changed")
+}
+
+func (hs *HTTPServer) handleUpdateUser(ctx context.Context, cmd user.UpdateUserCommand) response.Response {
+	// external user -> user data cannot be updated
+	isExternal, err := hs.isExternalUser(ctx, cmd.UserID)
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to validate User", err)
+	}
+
+	if isExternal {
+		return response.Error(http.StatusForbidden, "User info cannot be updated for external Users", nil)
+	}
+
 	if len(cmd.Login) == 0 {
 		cmd.Login = cmd.Email
-		if len(cmd.Login) == 0 {
-			return Error(400, "Validation error, need to specify either username or email", nil)
+	}
+
+	// if login is still empty both email and login field is missing
+	if len(cmd.Login) == 0 {
+		return response.Err(user.ErrEmptyUsernameAndEmail.Errorf("user cannot be created with empty username and email"))
+	}
+
+	if err := hs.userService.Update(ctx, &cmd); err != nil {
+		if errors.Is(err, user.ErrCaseInsensitive) {
+			return response.Error(http.StatusConflict, "Update would result in user login conflict", err)
 		}
+		return response.ErrOrFallback(http.StatusInternalServerError, "Failed to update user", err)
 	}
 
-	if err := bus.Dispatch(&cmd); err != nil {
-		return Error(500, "Failed to update user", err)
+	return response.Success("User updated")
+}
+
+func (hs *HTTPServer) isExternalUser(ctx context.Context, userID int64) (bool, error) {
+	getAuthQuery := login.GetAuthInfoQuery{UserId: userID}
+	var err error
+	if _, err = hs.authInfoService.GetAuthInfo(ctx, &getAuthQuery); err == nil {
+		return true, nil
 	}
 
-	return Success("User updated")
-}
-
-// GET /api/user/orgs
-func GetSignedInUserOrgList(c *m.ReqContext) Response {
-	return getUserOrgList(c.UserId)
-}
-
-// GET /api/user/teams
-func GetSignedInUserTeamList(c *m.ReqContext) Response {
-	return getUserTeamList(c.OrgId, c.UserId)
-}
-
-// GET /api/users/:id/teams
-func GetUserTeams(c *m.ReqContext) Response {
-	return getUserTeamList(c.OrgId, c.ParamsInt64(":id"))
-}
-
-func getUserTeamList(userID int64, orgID int64) Response {
-	query := m.GetTeamsByUserQuery{OrgId: orgID, UserId: userID}
-
-	if err := bus.Dispatch(&query); err != nil {
-		return Error(500, "Failed to get user teams", err)
+	if errors.Is(err, user.ErrUserNotFound) {
+		return false, nil
 	}
 
-	for _, team := range query.Result {
-		team.AvatarUrl = dtos.GetGravatarUrlWithDefault(team.Email, team.Name)
+	return false, err
+}
+
+// swagger:route GET /user/orgs signed_in_user getSignedInUserOrgList
+//
+// Organizations of the actual User.
+//
+// Return a list of all organizations of the current user.
+//
+// Security:
+// - basic:
+//
+// Responses:
+// 200: getSignedInUserOrgListResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 500: internalServerError
+func (hs *HTTPServer) GetSignedInUserOrgList(c *contextmodel.ReqContext) response.Response {
+	userID, errResponse := getUserID(c)
+	if errResponse != nil {
+		return errResponse
 	}
-	return JSON(200, query.Result)
+
+	return hs.getUserOrgList(c.Req.Context(), userID)
 }
 
-// GET /api/users/:id/orgs
-func GetUserOrgList(c *m.ReqContext) Response {
-	return getUserOrgList(c.ParamsInt64(":id"))
-}
-
-func getUserOrgList(userID int64) Response {
-	query := m.GetUserOrgListQuery{UserId: userID}
-
-	if err := bus.Dispatch(&query); err != nil {
-		return Error(500, "Failed to get user organizations", err)
+// swagger:route GET /user/teams signed_in_user getSignedInUserTeamList
+//
+// Teams that the actual User is member of.
+//
+// Return a list of all teams that the current user is member of.
+//
+// Responses:
+// 200: getSignedInUserTeamListResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 500: internalServerError
+func (hs *HTTPServer) GetSignedInUserTeamList(c *contextmodel.ReqContext) response.Response {
+	userID, errResponse := getUserID(c)
+	if errResponse != nil {
+		return errResponse
 	}
 
-	return JSON(200, query.Result)
+	return hs.getUserTeamList(c, c.SignedInUser.GetOrgID(), userID)
 }
 
-func validateUsingOrg(userID int64, orgID int64) bool {
-	query := m.GetUserOrgListQuery{UserId: userID}
+// swagger:route GET /users/{user_id}/teams users getUserTeams
+//
+// Get teams for user.
+//
+// Get teams for user identified by id.
+//
+// Responses:
+// 200: getUserTeamsResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 404: notFoundError
+// 500: internalServerError
+func (hs *HTTPServer) GetUserTeams(c *contextmodel.ReqContext) response.Response {
+	id, err := strconv.ParseInt(web.Params(c.Req)[":id"], 10, 64)
+	if err != nil {
+		return response.Error(http.StatusBadRequest, "id is invalid", err)
+	}
+	return hs.getUserTeamList(c, c.SignedInUser.GetOrgID(), id)
+}
 
-	if err := bus.Dispatch(&query); err != nil {
+func (hs *HTTPServer) getUserTeamList(c *contextmodel.ReqContext, orgID int64, userID int64) response.Response {
+	query := team.GetTeamsByUserQuery{OrgID: orgID, UserID: userID, SignedInUser: c.SignedInUser}
+
+	queryResult, err := hs.teamService.GetTeamsByUser(c.Req.Context(), &query)
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to get user teams", err)
+	}
+
+	for _, team := range queryResult {
+		team.AvatarURL = dtos.GetGravatarUrlWithDefault(team.Email, team.Name)
+	}
+	return response.JSON(http.StatusOK, queryResult)
+}
+
+// swagger:route GET /users/{user_id}/orgs users getUserOrgList
+//
+// Get organizations for user.
+//
+// Get organizations for user identified by id.
+//
+// Responses:
+// 200: getUserOrgListResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 404: notFoundError
+// 500: internalServerError
+func (hs *HTTPServer) GetUserOrgList(c *contextmodel.ReqContext) response.Response {
+	id, err := strconv.ParseInt(web.Params(c.Req)[":id"], 10, 64)
+	if err != nil {
+		return response.Error(http.StatusBadRequest, "id is invalid", err)
+	}
+	return hs.getUserOrgList(c.Req.Context(), id)
+}
+
+func (hs *HTTPServer) getUserOrgList(ctx context.Context, userID int64) response.Response {
+	query := org.GetUserOrgListQuery{UserID: userID}
+
+	result, err := hs.orgService.GetUserOrgList(ctx, &query)
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to get user organizations", err)
+	}
+
+	return response.JSON(http.StatusOK, result)
+}
+
+func (hs *HTTPServer) validateUsingOrg(ctx context.Context, userID int64, orgID int64) bool {
+	query := org.GetUserOrgListQuery{UserID: userID}
+
+	result, err := hs.orgService.GetUserOrgList(ctx, &query)
+	if err != nil {
 		return false
 	}
 
 	// validate that the org id in the list
 	valid := false
-	for _, other := range query.Result {
-		if other.OrgId == orgID {
+	for _, other := range result {
+		if other.OrgID == orgID {
 			valid = true
 		}
 	}
@@ -167,146 +379,373 @@ func validateUsingOrg(userID int64, orgID int64) bool {
 	return valid
 }
 
-// POST /api/user/using/:id
-func UserSetUsingOrg(c *m.ReqContext) Response {
-	orgID := c.ParamsInt64(":id")
-
-	if !validateUsingOrg(c.UserId, orgID) {
-		return Error(401, "Not a valid organization", nil)
+// swagger:route POST /user/using/{org_id} signed_in_user userSetUsingOrg
+//
+// Switch user context for signed in user.
+//
+// Switch user context to the given organization.
+//
+// Responses:
+// 200: okResponse
+// 400: badRequestError
+// 401: unauthorisedError
+// 403: forbiddenError
+// 500: internalServerError
+func (hs *HTTPServer) UserSetUsingOrg(c *contextmodel.ReqContext) response.Response {
+	orgID, err := strconv.ParseInt(web.Params(c.Req)[":id"], 10, 64)
+	if err != nil {
+		return response.Error(http.StatusBadRequest, "id is invalid", err)
 	}
 
-	cmd := m.SetUsingOrgCommand{UserId: c.UserId, OrgId: orgID}
-
-	if err := bus.Dispatch(&cmd); err != nil {
-		return Error(500, "Failed to change active organization", err)
+	userID, errResponse := getUserID(c)
+	if errResponse != nil {
+		return errResponse
 	}
 
-	return Success("Active organization changed")
+	if !hs.validateUsingOrg(c.Req.Context(), userID, orgID) {
+		return response.Error(http.StatusUnauthorized, "Not a valid organization", nil)
+	}
+
+	cmd := user.SetUsingOrgCommand{UserID: userID, OrgID: orgID}
+
+	if err := hs.userService.SetUsingOrg(c.Req.Context(), &cmd); err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to change active organization", err)
+	}
+
+	return response.Success("Active organization changed")
 }
 
 // GET /profile/switch-org/:id
-func (hs *HTTPServer) ChangeActiveOrgAndRedirectToHome(c *m.ReqContext) {
-	orgID := c.ParamsInt64(":id")
-
-	if !validateUsingOrg(c.UserId, orgID) {
-		hs.NotFoundHandler(c)
+func (hs *HTTPServer) ChangeActiveOrgAndRedirectToHome(c *contextmodel.ReqContext) {
+	orgID, err := strconv.ParseInt(web.Params(c.Req)[":id"], 10, 64)
+	if err != nil {
+		c.JsonApiErr(http.StatusBadRequest, "id is invalid", err)
+		return
 	}
 
-	cmd := m.SetUsingOrgCommand{UserId: c.UserId, OrgId: orgID}
-
-	if err := bus.Dispatch(&cmd); err != nil {
-		hs.NotFoundHandler(c)
+	namespace, identifier := c.SignedInUser.GetNamespacedID()
+	if namespace != identity.NamespaceUser {
+		c.JsonApiErr(http.StatusForbidden, "Endpoint only available for users", nil)
+		return
 	}
 
-	c.Redirect(setting.AppSubUrl + "/")
+	userID, err := identity.IntIdentifier(namespace, identifier)
+	if err != nil {
+		c.JsonApiErr(http.StatusInternalServerError, "Failed to parse user id", err)
+		return
+	}
+
+	if !hs.validateUsingOrg(c.Req.Context(), userID, orgID) {
+		hs.NotFoundHandler(c)
+		return
+	}
+
+	cmd := user.SetUsingOrgCommand{UserID: userID, OrgID: orgID}
+	if err := hs.userService.SetUsingOrg(c.Req.Context(), &cmd); err != nil {
+		hs.NotFoundHandler(c)
+		return
+	}
+
+	c.Redirect(hs.Cfg.AppSubURL + "/")
 }
 
-func ChangeUserPassword(c *m.ReqContext, cmd m.ChangeUserPasswordCommand) Response {
-	if setting.LdapEnabled || setting.AuthProxyEnabled {
-		return Error(400, "Not allowed to change password when LDAP or Auth Proxy is enabled", nil)
+// swagger:route PUT /user/password signed_in_user changeUserPassword
+//
+// Change Password.
+//
+// Changes the password for the user.
+//
+// Security:
+// - basic:
+//
+// Responses:
+// 200: okResponse
+// 400: badRequestError
+// 401: unauthorisedError
+// 403: forbiddenError
+// 500: internalServerError
+func (hs *HTTPServer) ChangeUserPassword(c *contextmodel.ReqContext) response.Response {
+	cmd := user.ChangeUserPasswordCommand{}
+	if err := web.Bind(c.Req, &cmd); err != nil {
+		return response.Error(http.StatusBadRequest, "bad request data", err)
 	}
 
-	userQuery := m.GetUserByIdQuery{Id: c.UserId}
-
-	if err := bus.Dispatch(&userQuery); err != nil {
-		return Error(500, "Could not read user from database", err)
+	userID, errResponse := getUserID(c)
+	if errResponse != nil {
+		return errResponse
 	}
 
-	passwordHashed := util.EncodePassword(cmd.OldPassword, userQuery.Result.Salt)
-	if passwordHashed != userQuery.Result.Password {
-		return Error(401, "Invalid old password", nil)
+	userQuery := user.GetUserByIDQuery{ID: userID}
+
+	usr, err := hs.userService.GetByID(c.Req.Context(), &userQuery)
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, "Could not read user from database", err)
 	}
 
-	password := m.Password(cmd.NewPassword)
+	getAuthQuery := login.GetAuthInfoQuery{UserId: usr.ID}
+	if authInfo, err := hs.authInfoService.GetAuthInfo(c.Req.Context(), &getAuthQuery); err == nil {
+		oauthInfo := hs.SocialService.GetOAuthInfoProvider(authInfo.AuthModule)
+		if login.IsProviderEnabled(hs.Cfg, authInfo.AuthModule, oauthInfo) {
+			return response.Error(http.StatusBadRequest, "Cannot update external user password", err)
+		}
+	}
+
+	passwordHashed, err := util.EncodePassword(cmd.OldPassword, usr.Salt)
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to encode password", err)
+	}
+	if passwordHashed != usr.Password {
+		return response.Error(http.StatusUnauthorized, "Invalid old password", nil)
+	}
+
+	password := user.Password(cmd.NewPassword)
 	if password.IsWeak() {
-		return Error(400, "New password is too short", nil)
+		return response.Error(http.StatusBadRequest, "New password is too short", nil)
 	}
 
-	cmd.UserId = c.UserId
-	cmd.NewPassword = util.EncodePassword(cmd.NewPassword, userQuery.Result.Salt)
-
-	if err := bus.Dispatch(&cmd); err != nil {
-		return Error(500, "Failed to change user password", err)
-	}
-
-	return Success("User password changed")
-}
-
-// GET /api/users
-func SearchUsers(c *m.ReqContext) Response {
-	query, err := searchUser(c)
+	cmd.UserID = userID
+	cmd.NewPassword, err = util.EncodePassword(cmd.NewPassword, usr.Salt)
 	if err != nil {
-		return Error(500, "Failed to fetch users", err)
+		return response.Error(http.StatusInternalServerError, "Failed to encode password", err)
 	}
 
-	return JSON(200, query.Result.Users)
+	if err := hs.userService.ChangePassword(c.Req.Context(), &cmd); err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to change user password", err)
+	}
+
+	return response.Success("User password changed")
 }
 
-// GET /api/users/search
-func SearchUsersWithPaging(c *m.ReqContext) Response {
-	query, err := searchUser(c)
+// redirectToChangePassword handles GET /.well-known/change-password.
+func redirectToChangePassword(c *contextmodel.ReqContext) {
+	c.Redirect("/profile/password", 302)
+}
+
+// swagger:route PUT /user/helpflags/{flag_id} signed_in_user setHelpFlag
+//
+// Set user help flag.
+//
+// Responses:
+// 200: helpFlagResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 500: internalServerError
+func (hs *HTTPServer) SetHelpFlag(c *contextmodel.ReqContext) response.Response {
+	flag, err := strconv.ParseInt(web.Params(c.Req)[":id"], 10, 64)
 	if err != nil {
-		return Error(500, "Failed to fetch users", err)
+		return response.Error(http.StatusBadRequest, "id is invalid", err)
 	}
 
-	return JSON(200, query.Result)
-}
-
-func searchUser(c *m.ReqContext) (*m.SearchUsersQuery, error) {
-	perPage := c.QueryInt("perpage")
-	if perPage <= 0 {
-		perPage = 1000
-	}
-	page := c.QueryInt("page")
-
-	if page < 1 {
-		page = 1
+	userID, errResponse := getUserID(c)
+	if errResponse != nil {
+		return errResponse
 	}
 
-	searchQuery := c.Query("query")
-
-	query := &m.SearchUsersQuery{Query: searchQuery, Page: page, Limit: perPage}
-	if err := bus.Dispatch(query); err != nil {
-		return nil, err
+	usr, err := hs.userService.GetByID(c.Req.Context(), &user.GetUserByIDQuery{ID: userID})
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to get user", err)
 	}
 
-	for _, user := range query.Result.Users {
-		user.AvatarUrl = dtos.GetGravatarUrl(user.Email)
-	}
+	bitmask := &usr.HelpFlags1
+	bitmask.AddFlag(user.HelpFlags1(flag))
 
-	query.Result.Page = page
-	query.Result.PerPage = perPage
-
-	return query, nil
-}
-
-func SetHelpFlag(c *m.ReqContext) Response {
-	flag := c.ParamsInt64(":id")
-
-	bitmask := &c.HelpFlags1
-	bitmask.AddFlag(m.HelpFlags1(flag))
-
-	cmd := m.SetUserHelpFlagCommand{
-		UserId:     c.UserId,
+	cmd := user.SetUserHelpFlagCommand{
+		UserID:     userID,
 		HelpFlags1: *bitmask,
 	}
 
-	if err := bus.Dispatch(&cmd); err != nil {
-		return Error(500, "Failed to update help flag", err)
+	if err := hs.userService.SetUserHelpFlag(c.Req.Context(), &cmd); err != nil {
+		return response.Error(http.StatusInternalServerError, "Failed to update help flag", err)
 	}
 
-	return JSON(200, &util.DynMap{"message": "Help flag set", "helpFlags1": cmd.HelpFlags1})
+	return response.JSON(http.StatusOK, &util.DynMap{"message": "Help flag set", "helpFlags1": cmd.HelpFlags1})
 }
 
-func ClearHelpFlags(c *m.ReqContext) Response {
-	cmd := m.SetUserHelpFlagCommand{
-		UserId:     c.UserId,
-		HelpFlags1: m.HelpFlags1(0),
+// swagger:route GET /user/helpflags/clear signed_in_user clearHelpFlags
+//
+// Clear user help flag.
+//
+// Responses:
+// 200: helpFlagResponse
+// 401: unauthorisedError
+// 403: forbiddenError
+// 500: internalServerError
+func (hs *HTTPServer) ClearHelpFlags(c *contextmodel.ReqContext) response.Response {
+	userID, errResponse := getUserID(c)
+	if errResponse != nil {
+		return errResponse
 	}
 
-	if err := bus.Dispatch(&cmd); err != nil {
-		return Error(500, "Failed to update help flag", err)
+	cmd := user.SetUserHelpFlagCommand{
+		UserID:     userID,
+		HelpFlags1: user.HelpFlags1(0),
 	}
 
-	return JSON(200, &util.DynMap{"message": "Help flag set", "helpFlags1": cmd.HelpFlags1})
+	if err := hs.userService.SetUserHelpFlag(c.Req.Context(), &cmd); err != nil {
+		return response.Error(500, "Failed to update help flag", err)
+	}
+
+	return response.JSON(http.StatusOK, &util.DynMap{"message": "Help flag set", "helpFlags1": cmd.HelpFlags1})
+}
+
+func getUserID(c *contextmodel.ReqContext) (int64, *response.NormalResponse) {
+	namespace, identifier := c.SignedInUser.GetNamespacedID()
+	if namespace != identity.NamespaceUser {
+		return 0, response.Error(http.StatusForbidden, "Endpoint only available for users", nil)
+	}
+
+	userID, err := identity.IntIdentifier(namespace, identifier)
+	if err != nil {
+		return 0, response.Error(http.StatusInternalServerError, "Failed to parse user id", err)
+	}
+
+	return userID, nil
+}
+
+// swagger:parameters searchUsers
+type SearchUsersParams struct {
+	// Limit the maximum number of users to return per page
+	// in:query
+	// required:false
+	// default:1000
+	Limit int64 `json:"perpage"`
+	// Page index for starting fetching users
+	// in:query
+	// required:false
+	// default:1
+	Page int64 `json:"page"`
+}
+
+// swagger:parameters searchUsersWithPaging
+
+type SearchUsersWithPagingParams struct {
+	// Limit the maximum number of users to return per page
+	// in:query
+	// required:false
+	// default:1000
+	Limit int64 `json:"perpage"`
+	// Page index for starting fetching users
+	// in:query
+	// required:false
+	// default:1
+	Page int64 `json:"page"`
+	// Query allows return results where the query value is contained in one of the name, login or email fields. Query values with spaces need to be URL encoded e.g. query=Jane%20Doe
+	// in:query
+	// required:false
+	Query string `json:"query"`
+}
+
+// swagger:parameters updateSignedInUser
+type UpdateSignedInUserParams struct {
+	// To change the email, name, login, theme, provide another one.
+	// in:body
+	// required:true
+	Body user.UpdateUserCommand `json:"body"`
+}
+
+// swagger:parameters userSetUsingOrg
+type UserSetUsingOrgParams struct {
+	// in:path
+	// required:true
+	OrgID int64 `json:"org_id"`
+}
+
+// swagger:parameters setHelpFlag
+type SetHelpFlagParams struct {
+	// in:path
+	// required:true
+	FlagID string `json:"flag_id"`
+}
+
+// swagger:parameters changeUserPassword
+type ChangeUserPasswordParams struct {
+	// To change the email, name, login, theme, provide another one.
+	// in:body
+	// required:true
+	Body user.ChangeUserPasswordCommand `json:"body"`
+}
+
+// swagger:parameters getUserByID
+type GetUserByIDParams struct {
+	// in:path
+	// required:true
+	UserID int64 `json:"user_id"`
+}
+
+// swagger:parameters getUserOrgList
+type GetUserOrgListParams struct {
+	// in:path
+	// required:true
+	UserID int64 `json:"user_id"`
+}
+
+// swagger:parameters getUserTeams
+type GetUserTeamsParams struct {
+	// in:path
+	// required:true
+	UserID int64 `json:"user_id"`
+}
+
+// swagger:parameters getUserByLoginOrEmail
+type GetUserByLoginOrEmailParams struct {
+	// loginOrEmail of the user
+	// in:query
+	// required:true
+	LoginOrEmail string `json:"loginOrEmail"`
+}
+
+// swagger:parameters updateUser
+type UpdateUserParams struct {
+	// To change the email, name, login, theme, provide another one.
+	// in:body
+	// required:true
+	Body user.UpdateUserCommand `json:"body"`
+	// in:path
+	// required:true
+	UserID int64 `json:"user_id"`
+}
+
+// swagger:response userResponse
+type UserResponse struct {
+	// The response message
+	// in: body
+	Body user.UserProfileDTO `json:"body"`
+}
+
+// swagger:response getUserOrgListResponse
+type GetUserOrgListResponse struct {
+	// The response message
+	// in: body
+	Body []*org.UserOrgDTO `json:"body"`
+}
+
+// swagger:response getSignedInUserOrgListResponse
+type GetSignedInUserOrgListResponse struct {
+	// The response message
+	// in: body
+	Body []*org.UserOrgDTO `json:"body"`
+}
+
+// swagger:response getUserTeamsResponse
+type GetUserTeamsResponse struct {
+	// The response message
+	// in: body
+	Body []*team.TeamDTO `json:"body"`
+}
+
+// swagger:response getSignedInUserTeamListResponse
+type GetSignedInUserTeamListResponse struct {
+	// The response message
+	// in: body
+	Body []*team.TeamDTO `json:"body"`
+}
+
+// swagger:response helpFlagResponse
+type HelpFlagResponse struct {
+	// The response message
+	// in: body
+	Body struct {
+		HelpFlags1 int64  `json:"helpFlags1"`
+		Message    string `json:"message"`
+	} `json:"body"`
 }

@@ -1,100 +1,101 @@
-import { ThunkAction } from 'redux-thunk';
-import { getBackendSrv } from 'app/core/services/backend_srv';
-import { StoreState, Team, TeamGroup, TeamMember } from 'app/types';
-import { updateNavIndex, UpdateNavIndexAction } from 'app/core/actions';
+import { debounce } from 'lodash';
+
+import { getBackendSrv } from '@grafana/runtime';
+import { FetchDataArgs } from '@grafana/ui';
+import { updateNavIndex } from 'app/core/actions';
+import { contextSrv } from 'app/core/core';
+import { accessControlQueryParam } from 'app/core/utils/accessControl';
+import { AccessControlAction, Team, TeamMember, ThunkResult } from 'app/types';
+
 import { buildNavModel } from './navModel';
+import {
+  teamGroupsLoaded,
+  queryChanged,
+  pageChanged,
+  teamLoaded,
+  teamMembersLoaded,
+  teamsLoaded,
+  sortChanged,
+  rolesFetchBegin,
+  rolesFetchEnd,
+} from './reducers';
 
-export enum ActionTypes {
-  LoadTeams = 'LOAD_TEAMS',
-  LoadTeam = 'LOAD_TEAM',
-  SetSearchQuery = 'SET_TEAM_SEARCH_QUERY',
-  SetSearchMemberQuery = 'SET_TEAM_MEMBER_SEARCH_QUERY',
-  LoadTeamMembers = 'TEAM_MEMBERS_LOADED',
-  LoadTeamGroups = 'TEAM_GROUPS_LOADED',
-}
+export function loadTeams(initial = false): ThunkResult<void> {
+  return async (dispatch, getState) => {
+    const { query, page, perPage, sort } = getState().teams;
+    // Early return if the user cannot list teams
+    if (!contextSrv.hasPermission(AccessControlAction.ActionTeamsRead)) {
+      dispatch(teamsLoaded({ teams: [], totalCount: 0, page: 1, perPage, noTeams: true }));
+      return;
+    }
 
-export interface LoadTeamsAction {
-  type: ActionTypes.LoadTeams;
-  payload: Team[];
-}
+    const response = await getBackendSrv().get(
+      '/api/teams/search',
+      accessControlQueryParam({ query, page, perpage: perPage, sort })
+    );
 
-export interface LoadTeamAction {
-  type: ActionTypes.LoadTeam;
-  payload: Team;
-}
+    // We only want to check if there is no teams on the initial request.
+    // A query that returns no teams should not render the empty list banner.
+    let noTeams = false;
+    if (initial) {
+      noTeams = response.teams.length === 0;
+    }
 
-export interface LoadTeamMembersAction {
-  type: ActionTypes.LoadTeamMembers;
-  payload: TeamMember[];
-}
+    if (
+      contextSrv.licensedAccessControlEnabled() &&
+      contextSrv.hasPermission(AccessControlAction.ActionTeamsRolesList)
+    ) {
+      dispatch(rolesFetchBegin());
+      const teamIds = response?.teams.map((t: Team) => t.id);
+      const roles = await getBackendSrv().post(`/api/access-control/teams/roles/search`, { teamIds });
+      response.teams.forEach((t: Team) => {
+        t.roles = roles ? roles[t.id] || [] : [];
+      });
+      dispatch(rolesFetchEnd());
+    }
 
-export interface LoadTeamGroupsAction {
-  type: ActionTypes.LoadTeamGroups;
-  payload: TeamGroup[];
-}
-
-export interface SetSearchQueryAction {
-  type: ActionTypes.SetSearchQuery;
-  payload: string;
-}
-
-export interface SetSearchMemberQueryAction {
-  type: ActionTypes.SetSearchMemberQuery;
-  payload: string;
-}
-
-export type Action =
-  | LoadTeamsAction
-  | SetSearchQueryAction
-  | LoadTeamAction
-  | LoadTeamMembersAction
-  | SetSearchMemberQueryAction
-  | LoadTeamGroupsAction;
-
-type ThunkResult<R> = ThunkAction<R, StoreState, undefined, Action | UpdateNavIndexAction>;
-
-const teamsLoaded = (teams: Team[]): LoadTeamsAction => ({
-  type: ActionTypes.LoadTeams,
-  payload: teams,
-});
-
-const teamLoaded = (team: Team): LoadTeamAction => ({
-  type: ActionTypes.LoadTeam,
-  payload: team,
-});
-
-const teamMembersLoaded = (teamMembers: TeamMember[]): LoadTeamMembersAction => ({
-  type: ActionTypes.LoadTeamMembers,
-  payload: teamMembers,
-});
-
-const teamGroupsLoaded = (teamGroups: TeamGroup[]): LoadTeamGroupsAction => ({
-  type: ActionTypes.LoadTeamGroups,
-  payload: teamGroups,
-});
-
-export const setSearchMemberQuery = (searchQuery: string): SetSearchMemberQueryAction => ({
-  type: ActionTypes.SetSearchMemberQuery,
-  payload: searchQuery,
-});
-
-export const setSearchQuery = (searchQuery: string): SetSearchQueryAction => ({
-  type: ActionTypes.SetSearchQuery,
-  payload: searchQuery,
-});
-
-export function loadTeams(): ThunkResult<void> {
-  return async dispatch => {
-    const response = await getBackendSrv().get('/api/teams/search', { perpage: 1000, page: 1 });
-    dispatch(teamsLoaded(response.teams));
+    dispatch(teamsLoaded({ noTeams, ...response }));
   };
 }
 
+const loadTeamsWithDebounce = debounce((dispatch) => dispatch(loadTeams()), 500);
+
 export function loadTeam(id: number): ThunkResult<void> {
-  return async dispatch => {
-    const response = await getBackendSrv().get(`/api/teams/${id}`);
+  return async (dispatch) => {
+    const response = await getBackendSrv().get(`/api/teams/${id}`, accessControlQueryParam());
     dispatch(teamLoaded(response));
     dispatch(updateNavIndex(buildNavModel(response)));
+  };
+}
+
+export function deleteTeam(id: number): ThunkResult<void> {
+  return async (dispatch) => {
+    await getBackendSrv().delete(`/api/teams/${id}`);
+    // Update users permissions in case they lost teams.read with the deletion
+    await contextSrv.fetchUserPermissions();
+    dispatch(loadTeams());
+  };
+}
+
+export function changeQuery(query: string): ThunkResult<void> {
+  return async (dispatch) => {
+    dispatch(queryChanged(query));
+    loadTeamsWithDebounce(dispatch);
+  };
+}
+
+export function changePage(page: number): ThunkResult<void> {
+  return async (dispatch) => {
+    dispatch(pageChanged(page));
+    dispatch(loadTeams());
+  };
+}
+
+export function changeSort({ sortBy }: FetchDataArgs<Team>): ThunkResult<void> {
+  const sort = sortBy.length ? `${sortBy[0].id}-${sortBy[0].desc ? 'desc' : 'asc'}` : undefined;
+  return async (dispatch) => {
+    dispatch(sortChanged(sort));
+    dispatch(loadTeams());
   };
 }
 
@@ -149,14 +150,17 @@ export function addTeamGroup(groupId: string): ThunkResult<void> {
 export function removeTeamGroup(groupId: string): ThunkResult<void> {
   return async (dispatch, getStore) => {
     const team = getStore().team.team;
-    await getBackendSrv().delete(`/api/teams/${team.id}/groups/${groupId}`);
+    // need to use query parameter due to escaped characters in the request
+    await getBackendSrv().delete(`/api/teams/${team.id}/groups?groupId=${encodeURIComponent(groupId)}`);
     dispatch(loadTeamGroups());
   };
 }
 
-export function deleteTeam(id: number): ThunkResult<void> {
-  return async dispatch => {
-    await getBackendSrv().delete(`/api/teams/${id}`);
-    dispatch(loadTeams());
+export function updateTeamMember(member: TeamMember): ThunkResult<void> {
+  return async (dispatch) => {
+    await getBackendSrv().put(`/api/teams/${member.teamId}/members/${member.userId}`, {
+      permission: member.permission,
+    });
+    dispatch(loadTeamMembers());
   };
 }

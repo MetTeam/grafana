@@ -1,22 +1,18 @@
-﻿import React from 'react';
-import renderer from 'react-test-renderer';
+import { render, screen } from '@testing-library/react';
+import React from 'react';
+
 import EmptyListCTA from './EmptyListCTA';
 
-const model = {
-  title: 'Title',
-  buttonIcon: 'ga css class',
-  buttonLink: 'http://url/to/destination',
-  buttonTitle: 'Click me',
-  onClick: jest.fn(),
-  proTip: 'This is a tip',
-  proTipLink: 'http://url/to/tip/destination',
-  proTipLinkTitle: 'Learn more',
-  proTipTarget: '_blank',
-};
-
 describe('EmptyListCTA', () => {
-  it('renders correctly', () => {
-    const tree = renderer.create(<EmptyListCTA model={model} />).toJSON();
-    expect(tree).toMatchSnapshot();
+  it('should return a button element if there is no buttonLink prop', () => {
+    render(<EmptyListCTA title="title" buttonIcon="plus" buttonTitle="button title" />);
+
+    expect(screen.getByRole('button', { name: 'button title' }));
+  });
+
+  it('should return an anchor element if there is a buttonLink prop', () => {
+    render(<EmptyListCTA title="title" buttonIcon="plus" buttonLink="href" buttonTitle="button title" />);
+
+    expect(screen.getByRole('link', { name: 'button title' }));
   });
 });

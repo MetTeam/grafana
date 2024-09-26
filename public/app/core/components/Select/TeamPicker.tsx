@@ -1,29 +1,26 @@
+import { debounce, DebouncedFuncLeading, isNil } from 'lodash';
 import React, { Component } from 'react';
-import _ from 'lodash';
-import { AsyncSelect } from './Select';
-import { debounce } from 'lodash';
-import { getBackendSrv } from 'app/core/services/backend_srv';
 
-export interface Team {
-  id: number;
-  label: string;
-  name: string;
-  avatarUrl: string;
-}
+import { SelectableValue } from '@grafana/data';
+import { getBackendSrv } from '@grafana/runtime';
+import { AsyncSelect } from '@grafana/ui';
+import { Team } from 'app/types';
 
 export interface Props {
-  onSelected: (team: Team) => void;
+  onSelected: (team: SelectableValue<Team>) => void;
   className?: string;
+  teamId?: number;
 }
 
 export interface State {
   isLoading: boolean;
+  value?: SelectableValue<Team>;
 }
 
 export class TeamPicker extends Component<Props, State> {
-  debouncedSearch: any;
+  debouncedSearch: DebouncedFuncLeading<typeof this.search>;
 
-  constructor(props) {
+  constructor(props: Props) {
     super(props);
     this.state = { isLoading: false };
     this.search = this.search.bind(this);
@@ -34,43 +31,63 @@ export class TeamPicker extends Component<Props, State> {
     });
   }
 
+  componentDidMount(): void {
+    const { teamId } = this.props;
+    if (!teamId) {
+      return;
+    }
+
+    getBackendSrv()
+      .get(`/api/teams/${teamId}`)
+      .then((team: Team) => {
+        this.setState({
+          value: {
+            value: team,
+            label: team.name,
+            imgUrl: team.avatarUrl,
+          },
+        });
+      });
+  }
+
   search(query?: string) {
-    const backendSrv = getBackendSrv();
     this.setState({ isLoading: true });
 
-    if (_.isNil(query)) {
+    if (isNil(query)) {
       query = '';
     }
 
-    return backendSrv.get(`/api/teams/search?perpage=10&page=1&query=${query}`).then(result => {
-      const teams = result.teams.map(team => {
-        return {
-          id: team.id,
-          value: team.id,
-          label: team.name,
-          name: team.name,
-          imgUrl: team.avatarUrl,
-        };
-      });
+    return getBackendSrv()
+      .get(`/api/teams/search?perpage=100&page=1&query=${query}`)
+      .then((result: { teams: Team[] }) => {
+        const teams: Array<SelectableValue<Team>> = result.teams.map((team) => {
+          return {
+            value: team,
+            label: team.name,
+            imgUrl: team.avatarUrl,
+          };
+        });
 
-      this.setState({ isLoading: false });
-      return teams;
-    });
+        this.setState({ isLoading: false });
+        return teams;
+      });
   }
 
   render() {
     const { onSelected, className } = this.props;
-    const { isLoading } = this.state;
+    const { isLoading, value } = this.state;
     return (
-      <div className="user-picker">
+      <div className="user-picker" data-testid="teamPicker">
         <AsyncSelect
           isLoading={isLoading}
           defaultOptions={true}
           loadOptions={this.debouncedSearch}
+          value={value}
           onChange={onSelected}
           className={className}
           placeholder="Select a team"
-          noOptionsMessage={() => 'No teams found'}
+          noOptionsMessage="No teams found"
+          aria-label="Team picker"
         />
       </div>
     );

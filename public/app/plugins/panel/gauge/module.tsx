@@ -1,83 +1,85 @@
-import React, { PureComponent } from 'react';
-import Gauge from 'app/viz/Gauge';
-import { getTimeSeriesVMs } from 'app/viz/state/timeSeries';
-import ValueOptions from './ValueOptions';
-import GaugeOptions from './GaugeOptions';
-import Thresholds from './Thresholds';
-import ValueMappings from './ValueMappings';
-import { PanelOptionsProps, PanelProps, NullValueMode } from '@grafana/ui';
-import { BasicGaugeColor, RangeMap, Threshold, ValueMap } from 'app/types';
+import { PanelPlugin } from '@grafana/data';
+import { BarGaugeSizing, VizOrientation } from '@grafana/schema';
+import { commonOptionsBuilder } from '@grafana/ui';
 
-export interface OptionsProps {
-  baseColor: string;
-  decimals: number;
-  mappings: Array<RangeMap | ValueMap>;
-  maxValue: number;
-  minValue: number;
-  prefix: string;
-  showThresholdLabels: boolean;
-  showThresholdMarkers: boolean;
-  stat: string;
-  suffix: string;
-  thresholds: Threshold[];
-  unit: string;
-}
+import { addOrientationOption, addStandardDataReduceOptions } from '../stat/common';
 
-export interface OptionModuleProps {
-  onChange: (item: any) => void;
-  options: OptionsProps;
-}
+import { gaugePanelMigrationHandler, gaugePanelChangedHandler } from './GaugeMigrations';
+import { GaugePanel } from './GaugePanel';
+import { Options, defaultOptions } from './panelcfg.gen';
+import { GaugeSuggestionsSupplier } from './suggestions';
 
-export const defaultProps = {
-  options: {
-    baseColor: BasicGaugeColor.Green,
-    minValue: 0,
-    maxValue: 100,
-    prefix: '',
-    showThresholdMarkers: true,
-    showThresholdLabels: false,
-    suffix: '',
-    decimals: 0,
-    stat: 'avg',
-    unit: 'none',
-    mappings: [],
-    thresholds: [],
-  },
-};
+export const plugin = new PanelPlugin<Options>(GaugePanel)
+  .useFieldConfig({
+    useCustomConfig: (builder) => {
+      builder.addNumberInput({
+        path: 'neutral',
+        name: 'Neutral',
+        description: 'Leave empty to use Min as neutral point',
+        category: ['Gauge'],
+        settings: {
+          placeholder: 'auto',
+        },
+      });
+    },
+  })
+  .setPanelOptions((builder) => {
+    addStandardDataReduceOptions(builder);
+    addOrientationOption(builder);
+    builder
+      .addBooleanSwitch({
+        path: 'showThresholdLabels',
+        name: 'Show threshold labels',
+        description: 'Render the threshold values around the gauge bar',
+        defaultValue: defaultOptions.showThresholdLabels,
+      })
+      .addBooleanSwitch({
+        path: 'showThresholdMarkers',
+        name: 'Show threshold markers',
+        description: 'Renders the thresholds as an outer bar',
+        defaultValue: defaultOptions.showThresholdMarkers,
+      })
+      .addRadio({
+        path: 'sizing',
+        name: 'Gauge size',
+        settings: {
+          options: [
+            { value: BarGaugeSizing.Auto, label: 'Auto' },
+            { value: BarGaugeSizing.Manual, label: 'Manual' },
+          ],
+        },
+        defaultValue: defaultOptions.sizing,
+        showIf: (options: Options) => options.orientation !== VizOrientation.Auto,
+      })
+      .addSliderInput({
+        path: 'minVizWidth',
+        name: 'Min width',
+        description: 'Minimum column width (vertical orientation)',
+        defaultValue: defaultOptions.minVizWidth,
+        settings: {
+          min: 0,
+          max: 600,
+          step: 1,
+        },
+        showIf: (options: Options) =>
+          options.sizing === BarGaugeSizing.Manual && options.orientation === VizOrientation.Vertical,
+      })
+      .addSliderInput({
+        path: 'minVizHeight',
+        name: 'Min height',
+        description: 'Minimum row height (horizontal orientation)',
+        defaultValue: defaultOptions.minVizHeight,
+        settings: {
+          min: 0,
+          max: 600,
+          step: 1,
+        },
+        showIf: (options: Options) =>
+          options.sizing === BarGaugeSizing.Manual && options.orientation === VizOrientation.Horizontal,
+      });
 
-interface Props extends PanelProps<OptionsProps> {}
-
-class GaugePanel extends PureComponent<Props> {
-  render() {
-    const { timeSeries, width, height } = this.props;
-
-    const vmSeries = getTimeSeriesVMs({
-      timeSeries: timeSeries,
-      nullValueMode: NullValueMode.Ignore,
-    });
-
-    return <Gauge timeSeries={vmSeries} {...this.props.options} width={width} height={height} />;
-  }
-}
-
-class Options extends PureComponent<PanelOptionsProps<OptionsProps>> {
-  static defaultProps = defaultProps;
-
-  render() {
-    const { onChange, options } = this.props;
-    return (
-      <div>
-        <div className="form-section">
-          <ValueOptions onChange={onChange} options={options} />
-          <GaugeOptions onChange={onChange} options={options} />
-          <Thresholds onChange={onChange} options={options} />
-        </div>
-        <div className="form-section">
-          <ValueMappings onChange={onChange} options={options} />
-        </div>
-      </div>
-    );
-  }
-}
-
-export { GaugePanel as Panel, Options as PanelOptions, defaultProps as PanelDefaults };
+    commonOptionsBuilder.addTextSizeOptions(builder);
+  })
+  .setPanelChangeHandler(gaugePanelChangedHandler)
+  .setSuggestionsSupplier(new GaugeSuggestionsSupplier())
+  .setMigrationHandler(gaugePanelMigrationHandler);

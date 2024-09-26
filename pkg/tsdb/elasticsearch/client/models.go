@@ -2,14 +2,13 @@ package es
 
 import (
 	"encoding/json"
-
-	"github.com/grafana/grafana/pkg/tsdb"
+	"time"
 )
 
 // SearchRequest represents a search request
 type SearchRequest struct {
 	Index       string
-	Interval    tsdb.Interval
+	Interval    time.Duration
 	Size        int
 	Sort        map[string]interface{}
 	Query       *Query
@@ -41,8 +40,7 @@ func (r *SearchRequest) MarshalJSON() ([]byte, error) {
 
 // SearchResponseHits represents search response hits
 type SearchResponseHits struct {
-	Hits  []map[string]interface{}
-	Total int64
+	Hits []map[string]interface{}
 }
 
 // SearchResponse represents a search response
@@ -51,21 +49,6 @@ type SearchResponse struct {
 	Aggregations map[string]interface{} `json:"aggregations"`
 	Hits         *SearchResponseHits    `json:"hits"`
 }
-
-// func (r *Response) getErrMsg() string {
-// 	var msg bytes.Buffer
-// 	errJson := simplejson.NewFromAny(r.Err)
-// 	errType, err := errJson.Get("type").String()
-// 	if err == nil {
-// 		msg.WriteString(fmt.Sprintf("type:%s", errType))
-// 	}
-
-// 	reason, err := errJson.Get("type").String()
-// 	if err == nil {
-// 		msg.WriteString(fmt.Sprintf("reason:%s", reason))
-// 	}
-// 	return msg.String()
-// }
 
 // MultiSearchRequest represents a multi search request
 type MultiSearchRequest struct {
@@ -86,11 +69,6 @@ type Query struct {
 // BoolQuery represents a bool query
 type BoolQuery struct {
 	Filters []Filter
-}
-
-// NewBoolQuery create a new bool query
-func NewBoolQuery() *BoolQuery {
-	return &BoolQuery{Filters: make([]Filter, 0)}
 }
 
 // MarshalJSON returns the JSON encoding of the boolean query.
@@ -133,8 +111,8 @@ func (f *QueryStringFilter) MarshalJSON() ([]byte, error) {
 type RangeFilter struct {
 	Filter
 	Key    string
-	Gte    string
-	Lte    string
+	Gte    int64
+	Lte    int64
 	Format string
 }
 
@@ -234,13 +212,20 @@ type HistogramAgg struct {
 
 // DateHistogramAgg represents a date histogram aggregation
 type DateHistogramAgg struct {
-	Field          string          `json:"field"`
-	Interval       string          `json:"interval,omitempty"`
-	MinDocCount    int             `json:"min_doc_count"`
-	Missing        *string         `json:"missing,omitempty"`
-	ExtendedBounds *ExtendedBounds `json:"extended_bounds"`
-	Format         string          `json:"format"`
-	Offset         string          `json:"offset,omitempty"`
+	Field            string          `json:"field"`
+	FixedInterval    string          `json:"fixed_interval,omitempty"`
+	CalendarInterval string          `json:"calendar_interval,omitempty"`
+	MinDocCount      int             `json:"min_doc_count"`
+	Missing          *string         `json:"missing,omitempty"`
+	ExtendedBounds   *ExtendedBounds `json:"extended_bounds"`
+	Format           string          `json:"format"`
+	Offset           string          `json:"offset,omitempty"`
+	TimeZone         string          `json:"time_zone,omitempty"`
+}
+
+// GetCalendarIntervals provides the list of intervals used for building calendar bucketAgg
+func GetCalendarIntervals() []string {
+	return []string{"1w", "1M", "1q", "1y"}
 }
 
 // FiltersAggregation represents a filters aggregation
@@ -257,10 +242,15 @@ type TermsAggregation struct {
 	Missing     *string                `json:"missing,omitempty"`
 }
 
+// NestedAggregation represents a nested aggregation
+type NestedAggregation struct {
+	Path string `json:"path"`
+}
+
 // ExtendedBounds represents extended bounds
 type ExtendedBounds struct {
-	Min string `json:"min"`
-	Max string `json:"max"`
+	Min int64 `json:"min"`
+	Max int64 `json:"max"`
 }
 
 // GeoHashGridAggregation represents a geo hash grid aggregation
@@ -271,14 +261,45 @@ type GeoHashGridAggregation struct {
 
 // MetricAggregation represents a metric aggregation
 type MetricAggregation struct {
+	Type     string
 	Field    string
 	Settings map[string]interface{}
 }
 
 // MarshalJSON returns the JSON encoding of the metric aggregation
 func (a *MetricAggregation) MarshalJSON() ([]byte, error) {
-	root := map[string]interface{}{
-		"field": a.Field,
+	if a.Type == "top_metrics" {
+		root := map[string]interface{}{}
+		var rootMetrics []map[string]string
+
+		order, hasOrder := a.Settings["order"]
+		orderBy, hasOrderBy := a.Settings["orderBy"]
+
+		root["size"] = "1"
+
+		metrics, hasMetrics := a.Settings["metrics"].([]interface{})
+		if hasMetrics {
+			for _, v := range metrics {
+				metricValue := map[string]string{"field": v.(string)}
+				rootMetrics = append(rootMetrics, metricValue)
+			}
+			root["metrics"] = rootMetrics
+		}
+
+		if hasOrderBy && hasOrder {
+			root["sort"] = []map[string]interface{}{
+				{
+					orderBy.(string): order,
+				},
+			}
+		}
+
+		return json.Marshal(root)
+	}
+	root := map[string]interface{}{}
+
+	if a.Field != "" {
+		root["field"] = a.Field
 	}
 
 	for k, v := range a.Settings {
@@ -292,7 +313,7 @@ func (a *MetricAggregation) MarshalJSON() ([]byte, error) {
 
 // PipelineAggregation represents a metric aggregation
 type PipelineAggregation struct {
-	BucketPath string
+	BucketPath interface{}
 	Settings   map[string]interface{}
 }
 

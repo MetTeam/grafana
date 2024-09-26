@@ -1,156 +1,358 @@
-import moment from 'moment';
-import { MysqlDatasource } from '../datasource';
-import { CustomVariable } from 'app/features/templating/custom_variable';
+import { of } from 'rxjs';
+
+import {
+  dataFrameToJSON,
+  getDefaultTimeRange,
+  DataQueryRequest,
+  DataSourceInstanceSettings,
+  dateTime,
+  FieldType,
+  createDataFrame,
+} from '@grafana/data';
+import { FetchResponse } from '@grafana/runtime';
+import { SQLQuery } from 'app/features/plugins/sql/types';
+import { makeVariable } from 'app/features/plugins/sql/utils/testHelpers';
+
+import { MySqlDatasource } from '../MySqlDatasource';
+import { MySQLOptions } from '../types';
+
+const fetchMock = jest.fn();
+jest.mock('@grafana/runtime', () => ({
+  ...jest.requireActual('@grafana/runtime'),
+  getBackendSrv: () => ({
+    fetch: fetchMock,
+  }),
+}));
 
 describe('MySQLDatasource', () => {
-  const instanceSettings = { name: 'mysql' };
-  const backendSrv = {};
-  const templateSrv = {
-    replace: jest.fn(text => text),
+  const defaultRange = getDefaultTimeRange(); // it does not matter what value this has
+  const setupTestContext = (response: unknown, templateSrv?: unknown) => {
+    jest.clearAllMocks();
+    const instanceSettings = {
+      jsonData: {
+        defaultProject: 'testproject',
+      },
+    } as unknown as DataSourceInstanceSettings<MySQLOptions>;
+    const variable = makeVariable('id1', 'name1');
+    fetchMock.mockImplementation((options) => of(createFetchResponse(response)));
+
+    const ds = new MySqlDatasource(instanceSettings);
+    if (templateSrv !== undefined) {
+      Reflect.set(ds, 'templateSrv', templateSrv);
+    }
+
+    return { ds, variable, fetchMock };
   };
 
-  const raw = {
-    from: moment.utc('2018-04-25 10:00'),
-    to: moment.utc('2018-04-25 11:00'),
+  const simpleTemplateSrv = {
+    replace: (text: string) => text,
   };
-  const ctx = {
-    backendSrv,
-    timeSrvMock: {
-      timeRange: () => ({
-        from: raw.from,
-        to: raw.to,
-        raw: raw,
-      }),
-    },
-  } as any;
 
-  beforeEach(() => {
-    ctx.ds = new MysqlDatasource(instanceSettings, backendSrv, {}, templateSrv, ctx.timeSrvMock);
+  describe('When performing a query with hidden target', () => {
+    it('should return empty result and backendSrv.fetch should not be called', async () => {
+      const options = {
+        range: {
+          from: dateTime(1432288354),
+          to: dateTime(1432288401),
+        },
+        targets: [
+          {
+            format: 'table',
+            rawQuery: true,
+            rawSql: 'select time, metric, value from grafana_metric',
+            refId: 'A',
+            datasource: 'gdev-ds',
+            hide: true,
+          },
+        ],
+      } as unknown as DataQueryRequest<SQLQuery>;
+
+      const { ds, fetchMock } = setupTestContext({});
+
+      await expect(ds.query(options)).toEmitValuesWith((received) => {
+        expect(received[0]).toEqual({ data: [] });
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+    });
   });
 
-  describe('When performing annotationQuery', () => {
-    let results;
-
-    const annotationName = 'MyAnno';
-
-    const options = {
-      annotation: {
-        name: annotationName,
-        rawQuery: 'select time_sec, text, tags from table;',
-      },
-      range: {
-        from: moment(1432288354),
-        to: moment(1432288401),
-      },
-    };
-
+  describe('When runSql returns an empty dataframe', () => {
     const response = {
       results: {
-        MyAnno: {
-          refId: annotationName,
-          tables: [
-            {
-              columns: [{ text: 'time_sec' }, { text: 'text' }, { text: 'tags' }],
-              rows: [
-                [1432288355, 'some text', 'TagA,TagB'],
-                [1432288390, 'some text2', ' TagB , TagC'],
-                [1432288400, 'some text3'],
-              ],
-            },
-          ],
+        tempvar: {
+          refId: 'tempvar',
+          frames: [],
         },
       },
     };
 
-    beforeEach(() => {
-      ctx.backendSrv.datasourceRequest = jest.fn(options => {
-        return Promise.resolve({ data: response, status: 200 });
-      });
-      ctx.ds.annotationQuery(options).then(data => {
-        results = data;
-      });
+    it('should return an empty array when metricFindQuery is called', async () => {
+      const ds = setupTestContext(response, simpleTemplateSrv).ds;
+      const query = 'select * from atable';
+      const results = await ds.metricFindQuery(query, { range: defaultRange });
+      expect(results.length).toBe(0);
     });
 
-    it('should return annotation list', () => {
-      expect(results.length).toBe(3);
+    it('should return an empty array when fetchDatasets is called', async () => {
+      const ds = setupTestContext(response).ds;
+      const results = await ds.fetchDatasets();
+      expect(results.length).toBe(0);
+    });
 
-      expect(results[0].text).toBe('some text');
-      expect(results[0].tags[0]).toBe('TagA');
-      expect(results[0].tags[1]).toBe('TagB');
+    it('should return an empty array when fetchTables is called', async () => {
+      const ds = setupTestContext(response).ds;
+      const results = await ds.fetchTables();
+      expect(results.length).toBe(0);
+    });
 
-      expect(results[1].tags[0]).toBe('TagB');
-      expect(results[1].tags[1]).toBe('TagC');
-
-      expect(results[2].tags.length).toBe(0);
+    it('should return an empty array when fetchFields is called', async () => {
+      const ds = setupTestContext(response).ds;
+      const query: SQLQuery = {
+        refId: 'refId',
+        table: 'schema.table',
+        dataset: 'dataset',
+      };
+      const results = await ds.fetchFields(query);
+      expect(results.length).toBe(0);
     });
   });
 
-  describe('When performing metricFindQuery', () => {
-    let results;
+  describe('When runSql returns a populated dataframe', () => {
+    it('should return a list of datasets when fetchDatasets is called', async () => {
+      const fetchDatasetsResponse = {
+        results: {
+          datasets: {
+            refId: 'datasets',
+            frames: [
+              dataFrameToJSON(
+                createDataFrame({
+                  fields: [{ name: 'name', type: FieldType.string, values: ['test1', 'test2', 'test3'] }],
+                })
+              ),
+            ],
+          },
+        },
+      };
+      const { ds } = setupTestContext(fetchDatasetsResponse);
+
+      const results = await ds.fetchDatasets();
+      expect(results.length).toBe(3);
+      expect(results).toEqual(['test1', 'test2', 'test3']);
+    });
+
+    it('should return a list of tables when fetchTables is called', async () => {
+      const fetchTableResponse = {
+        results: {
+          tables: {
+            refId: 'tables',
+            frames: [
+              dataFrameToJSON(
+                createDataFrame({
+                  fields: [{ name: 'table_name', type: FieldType.string, values: ['test1', 'test2', 'test3'] }],
+                })
+              ),
+            ],
+          },
+        },
+      };
+      const { ds } = setupTestContext(fetchTableResponse);
+
+      const results = await ds.fetchTables();
+      expect(results.length).toBe(3);
+      expect(results).toEqual(['test1', 'test2', 'test3']);
+    });
+
+    it('should return a list of fields when fetchFields is called', async () => {
+      const fetchFieldsResponse = {
+        results: {
+          fields: {
+            refId: 'fields',
+            frames: [
+              dataFrameToJSON(
+                createDataFrame({
+                  fields: [
+                    { name: 'column_name', type: FieldType.string, values: ['test1', 'test2', 'test3'] },
+                    { name: 'data_type', type: FieldType.string, values: ['int', 'char', 'bool'] },
+                  ],
+                })
+              ),
+            ],
+          },
+        },
+      };
+      const { ds } = setupTestContext(fetchFieldsResponse);
+
+      const sqlQuery: SQLQuery = {
+        refId: 'fields',
+        table: 'table',
+        dataset: 'dataset',
+      };
+      const results = await ds.fetchFields(sqlQuery);
+      expect(results.length).toBe(3);
+      expect(results[0].label).toBe('test1');
+      expect(results[0].value).toBe('test1');
+      expect(results[0].type).toBe('int');
+      expect(results[1].label).toBe('test2');
+      expect(results[1].value).toBe('test2');
+      expect(results[1].type).toBe('char');
+      expect(results[2].label).toBe('test3');
+      expect(results[2].value).toBe('test3');
+      expect(results[2].type).toBe('bool');
+    });
+  });
+
+  describe('When performing metricFindQuery that returns multiple string fields', () => {
     const query = 'select * from atable';
     const response = {
       results: {
         tempvar: {
-          meta: {
-            rowCount: 3,
-          },
           refId: 'tempvar',
-          tables: [
-            {
-              columns: [{ text: 'title' }, { text: 'text' }],
-              rows: [['aTitle', 'some text'], ['aTitle2', 'some text2'], ['aTitle3', 'some text3']],
-            },
+          frames: [
+            dataFrameToJSON(
+              createDataFrame({
+                fields: [
+                  { name: 'title', values: ['aTitle', 'aTitle2', 'aTitle3'] },
+                  { name: 'text', values: ['some text', 'some text2', 'some text3'] },
+                ],
+                meta: {
+                  executedQueryString: 'select * from atable',
+                },
+              })
+            ),
           ],
         },
       },
     };
 
-    beforeEach(() => {
-      ctx.backendSrv.datasourceRequest = jest.fn(options => {
-        return Promise.resolve({ data: response, status: 200 });
-      });
-      ctx.ds.metricFindQuery(query).then(data => {
-        results = data;
-      });
-    });
+    it('should return list of all string field values', async () => {
+      const { ds } = setupTestContext(response, simpleTemplateSrv);
+      const results = await ds.metricFindQuery(query, { range: defaultRange });
 
-    it('should return list of all column values', () => {
       expect(results.length).toBe(6);
       expect(results[0].text).toBe('aTitle');
       expect(results[5].text).toBe('some text3');
     });
   });
 
-  describe('When performing metricFindQuery with key, value columns', () => {
-    let results;
-    const query = 'select * from atable';
+  describe('When performing metricFindQuery with $__searchFilter and a searchFilter is given', () => {
+    const query = "select title from atable where title LIKE '$__searchFilter'";
     const response = {
       results: {
         tempvar: {
-          meta: {
-            rowCount: 3,
-          },
           refId: 'tempvar',
-          tables: [
-            {
-              columns: [{ text: '__value' }, { text: '__text' }],
-              rows: [['value1', 'aTitle'], ['value2', 'aTitle2'], ['value3', 'aTitle3']],
-            },
+          frames: [
+            dataFrameToJSON(
+              createDataFrame({
+                fields: [
+                  { name: 'title', values: ['aTitle', 'aTitle2', 'aTitle3'] },
+                  { name: 'text', values: ['some text', 'some text2', 'some text3'] },
+                ],
+                meta: {
+                  executedQueryString: 'select * from atable',
+                },
+              })
+            ),
           ],
         },
       },
     };
 
-    beforeEach(() => {
-      ctx.backendSrv.datasourceRequest = jest.fn(options => {
-        return Promise.resolve({ data: response, status: 200 });
-      });
-      ctx.ds.metricFindQuery(query).then(data => {
-        results = data;
-      });
-    });
+    it('should return list of all column values', async () => {
+      const templateSrv = {
+        replace: (text: string, scopedVars: unknown) => {
+          expect(text).toBe("select title from atable where title LIKE '$__searchFilter'");
+          expect(scopedVars).toStrictEqual({
+            __searchFilter: {
+              value: 'aTit%',
+              text: '',
+            },
+          });
+          return "select title from atable where title LIKE 'aTit%'";
+        },
+      };
+      const { ds, fetchMock } = setupTestContext(response, templateSrv);
+      const results = await ds.metricFindQuery(query, { range: defaultRange, searchFilter: 'aTit' });
 
-    it('should return list of as text, value', () => {
+      expect(fetchMock).toBeCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0].data.queries[0].rawSql).toBe(
+        "select title from atable where title LIKE 'aTit%'"
+      );
+      expect(results.length).toBe(6);
+    });
+  });
+
+  describe('When performing metricFindQuery with $__searchFilter but no searchFilter is given', () => {
+    const query = "select title from atable where title LIKE '$__searchFilter'";
+    const response = {
+      results: {
+        tempvar: {
+          refId: 'tempvar',
+          frames: [
+            dataFrameToJSON(
+              createDataFrame({
+                fields: [
+                  { name: 'title', values: ['aTitle', 'aTitle2', 'aTitle3'] },
+                  { name: 'text', values: ['some text', 'some text2', 'some text3'] },
+                ],
+                meta: {
+                  executedQueryString: 'select * from atable',
+                },
+              })
+            ),
+          ],
+        },
+      },
+    };
+
+    it('should return list of all column values', async () => {
+      const templateSrv = {
+        replace: (text: string, scopedVars: unknown) => {
+          expect(text).toBe("select title from atable where title LIKE '$__searchFilter'");
+          expect(scopedVars).toStrictEqual({
+            __searchFilter: {
+              value: '%',
+              text: '',
+            },
+          });
+          return "select title from atable where title LIKE '%'";
+        },
+      };
+      const { ds, fetchMock } = setupTestContext(response, templateSrv);
+      const results = await ds.metricFindQuery(query, { range: defaultRange });
+
+      expect(fetchMock).toBeCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0].data.queries[0].rawSql).toBe("select title from atable where title LIKE '%'");
+      expect(results.length).toBe(6);
+    });
+  });
+
+  describe('When performing metricFindQuery with key, value columns', () => {
+    const query = 'select * from atable';
+    const response = {
+      results: {
+        tempvar: {
+          refId: 'tempvar',
+          frames: [
+            dataFrameToJSON(
+              createDataFrame({
+                fields: [
+                  { name: '__value', values: ['value1', 'value2', 'value3'] },
+                  { name: '__text', values: ['aTitle', 'aTitle2', 'aTitle3'] },
+                ],
+                meta: {
+                  executedQueryString: 'select * from atable',
+                },
+              })
+            ),
+          ],
+        },
+      },
+    };
+
+    it('should return list of as text, value', async () => {
+      const { ds } = setupTestContext(response, simpleTemplateSrv);
+      const results = await ds.metricFindQuery(query, { range: defaultRange });
+
       expect(results.length).toBe(3);
       expect(results[0].text).toBe('aTitle');
       expect(results[0].value).toBe('value1');
@@ -159,36 +361,71 @@ describe('MySQLDatasource', () => {
     });
   });
 
-  describe('When performing metricFindQuery with key, value columns and with duplicate keys', () => {
-    let results;
-    const query = 'select * from atable';
+  describe('When performing metricFindQuery without key, value columns', () => {
+    const query = 'select id, values from atable';
     const response = {
       results: {
         tempvar: {
-          meta: {
-            rowCount: 3,
-          },
           refId: 'tempvar',
-          tables: [
-            {
-              columns: [{ text: '__text' }, { text: '__value' }],
-              rows: [['aTitle', 'same'], ['aTitle', 'same'], ['aTitle', 'diff']],
-            },
+          frames: [
+            dataFrameToJSON(
+              createDataFrame({
+                fields: [
+                  { name: 'id', values: [1, 2, 3] },
+                  { name: 'values', values: ['test1', 'test2', 'test3'] },
+                ],
+                meta: {
+                  executedQueryString: 'select id, values from atable',
+                },
+              })
+            ),
           ],
         },
       },
     };
 
-    beforeEach(() => {
-      ctx.backendSrv.datasourceRequest = jest.fn(options => {
-        return Promise.resolve({ data: response, status: 200 });
-      });
-      ctx.ds.metricFindQuery(query).then(data => {
-        results = data;
-      });
-    });
+    it('should return list of all field values as text', async () => {
+      const { ds } = setupTestContext(response, simpleTemplateSrv);
+      const results = await ds.metricFindQuery(query, { range: defaultRange });
 
-    it('should return list of unique keys', () => {
+      expect(results).toEqual([
+        { text: 1 },
+        { text: 2 },
+        { text: 3 },
+        { text: 'test1' },
+        { text: 'test2' },
+        { text: 'test3' },
+      ]);
+    });
+  });
+
+  describe('When performing metricFindQuery with key, value columns and with duplicate keys', () => {
+    const query = 'select * from atable';
+    const response = {
+      results: {
+        tempvar: {
+          refId: 'tempvar',
+          frames: [
+            dataFrameToJSON(
+              createDataFrame({
+                fields: [
+                  { name: '__text', values: ['aTitle', 'aTitle', 'aTitle'] },
+                  { name: '__value', values: ['same', 'same', 'diff'] },
+                ],
+                meta: {
+                  executedQueryString: 'select * from atable',
+                },
+              })
+            ),
+          ],
+        },
+      },
+    };
+
+    it('should return list of unique keys', async () => {
+      const { ds } = setupTestContext(response, simpleTemplateSrv);
+      const results = await ds.metricFindQuery(query, { range: defaultRange });
+
       expect(results.length).toBe(1);
       expect(results[0].text).toBe('aTitle');
       expect(results[0].value).toBe('same');
@@ -196,47 +433,131 @@ describe('MySQLDatasource', () => {
   });
 
   describe('When interpolating variables', () => {
-    beforeEach(() => {
-      ctx.variable = new CustomVariable({}, {});
-    });
-
     describe('and value is a string', () => {
       it('should return an unquoted value', () => {
-        expect(ctx.ds.interpolateVariable('abc', ctx.variable)).toEqual('abc');
+        const { ds, variable } = setupTestContext({});
+        expect(ds.interpolateVariable('abc', variable)).toEqual('abc');
       });
     });
 
     describe('and value is a number', () => {
       it('should return an unquoted value', () => {
-        expect(ctx.ds.interpolateVariable(1000, ctx.variable)).toEqual(1000);
+        const { ds, variable } = setupTestContext({});
+        expect(ds.interpolateVariable(1000, variable)).toEqual(1000);
       });
     });
 
     describe('and value is an array of strings', () => {
       it('should return comma separated quoted values', () => {
-        expect(ctx.ds.interpolateVariable(['a', 'b', 'c'], ctx.variable)).toEqual("'a','b','c'");
+        const { ds, variable } = setupTestContext({});
+        expect(ds.interpolateVariable(['a', 'b', 'c'], variable)).toEqual("'a','b','c'");
       });
     });
 
     describe('and variable allows multi-value and value is a string', () => {
       it('should return a quoted value', () => {
-        ctx.variable.multi = true;
-        expect(ctx.ds.interpolateVariable('abc', ctx.variable)).toEqual("'abc'");
+        const { ds, variable } = setupTestContext({});
+        variable.multi = true;
+        expect(ds.interpolateVariable('abc', variable)).toEqual("'abc'");
       });
     });
 
     describe('and variable contains single quote', () => {
       it('should return a quoted value', () => {
-        ctx.variable.multi = true;
-        expect(ctx.ds.interpolateVariable("a'bc", ctx.variable)).toEqual("'a''bc'");
+        const { ds, variable } = setupTestContext({});
+        variable.multi = true;
+        expect(ds.interpolateVariable("a'bc", variable)).toEqual("'a''bc'");
       });
     });
 
     describe('and variable allows all and value is a string', () => {
       it('should return a quoted value', () => {
-        ctx.variable.includeAll = true;
-        expect(ctx.ds.interpolateVariable('abc', ctx.variable)).toEqual("'abc'");
+        const { ds, variable } = setupTestContext({});
+        variable.includeAll = true;
+        expect(ds.interpolateVariable('abc', variable)).toEqual("'abc'");
       });
     });
   });
+
+  describe('targetContainsTemplate', () => {
+    it('given query that contains template variable it should return true', () => {
+      const rawSql = `SELECT
+      $__timeGroup(createdAt,'$summarize') as time_sec,
+      avg(value) as value,
+      hostname as metric
+    FROM
+      grafana_metric
+    WHERE
+      $__timeFilter(createdAt) AND
+      foo = 'bar' AND
+      measurement = 'logins.count' AND
+      hostname IN($host)
+    GROUP BY 1, 3
+    ORDER BY 1`;
+      const query = {
+        rawSql,
+        rawQuery: true,
+        refId: '',
+      };
+      // a fake template server:
+      // it assumes there are two template variables defined:
+      // - summarize
+      // - host
+      const templateSrv = {
+        containsTemplate: (text: string) => {
+          // when the text arrives here, it has been already pre-processed
+          // by the sql datasource, sql-specific variables have been removed
+          expect(text).toBe(rawSql.replace(/\$__time(Filter)?/g, ''));
+          return true;
+        },
+      };
+      const { ds } = setupTestContext({}, templateSrv);
+      expect(ds.targetContainsTemplate(query)).toBeTruthy();
+    });
+
+    it('given query that only contains global template variable it should return false', () => {
+      const rawSql = `SELECT
+      $__timeGroup(createdAt,'$__interval') as time_sec,
+      avg(value) as value,
+      hostname as metric
+    FROM
+      grafana_metric
+    WHERE
+      $__timeFilter(createdAt) AND
+      measurement = 'logins.count'
+    GROUP BY 1, 3
+    ORDER BY 1`;
+      const query = {
+        rawSql,
+        rawQuery: true,
+        refId: '',
+      };
+      // a fake template server:
+      // it assumes there are two template variables defined:
+      // - summarize
+      // - host
+      const templateSrv = {
+        containsTemplate: (text: string) => {
+          // when the text arrives here, it has been already pre-processed
+          // by the sql datasource, sql-specific variables have been removed
+          expect(text).toBe(rawSql.replace(/\$__time(Filter)?/g, ''));
+          return false;
+        },
+      };
+      const { ds } = setupTestContext({}, templateSrv);
+      expect(ds.targetContainsTemplate(query)).toBeFalsy();
+    });
+  });
+});
+
+const createFetchResponse = <T>(data: T): FetchResponse<T> => ({
+  data,
+  status: 200,
+  url: 'http://localhost:3000/api/query',
+  config: { url: 'http://localhost:3000/api/query' },
+  type: 'basic',
+  statusText: 'Ok',
+  redirected: false,
+  headers: {} as unknown as Headers,
+  ok: true,
 });

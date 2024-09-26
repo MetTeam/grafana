@@ -325,9 +325,9 @@
          */
         Gauge.prototype.drawGauge = function(gaugeOptionsi, layout, cellLayout, label, data) {
 
-
             var blur = gaugeOptionsi.gauge.shadow.show ? gaugeOptionsi.gauge.shadow.blur : 0;
-
+            var color = getColor(gaugeOptionsi, data);
+            var angles = calculateAnglesForGauge(gaugeOptionsi, layout, data);
 
             // draw gauge frame
             drawArcWithShadow(
@@ -343,19 +343,74 @@
                 blur);
 
             // draw gauge
-            var c1 = getColor(gaugeOptionsi, data);
-            var a2 = calculateAngle(gaugeOptionsi, layout, data);
             drawArcWithShadow(
                 cellLayout.cx, // center x
                 cellLayout.cy, // center y
                 layout.radius - 1,
                 layout.width - 2,
-                toRad(gaugeOptionsi.gauge.startAngle),
-                toRad(a2),
-                c1,           // line color
+                toRad(angles.a1),
+                toRad(angles.a2),
+                color,
                 1,            // line width
-                c1,           // fill color
+                color,           // fill color
                 blur);
+            
+            if(gaugeOptionsi.gauge.neutralValue != null)  {
+                drawZeroMarker(gaugeOptionsi, layout, cellLayout, color);
+            }
+        }
+
+        /**
+         * Calcualte the angles for the gauge, depending on if there are
+         * negative numbers or not.
+         * 
+         * @method calculateAnglesForGauge
+         * @param {Object} gaugeOptionsi the options of the gauge
+         * @param  {Number} data the value of the gauge
+         * @returns {Object}
+         */
+        function calculateAnglesForGauge(gaugeOptionsi, layout, data) {
+            let angles = {};
+            var neutral = gaugeOptionsi.gauge.neutralValue;
+
+            if (neutral != null) {
+                if (data < neutral) {
+                    angles.a1 = calculateAngle(gaugeOptionsi, layout, data);
+                    angles.a2 = calculateAngle(gaugeOptionsi, layout, neutral);
+                } else {
+                    angles.a1 = calculateAngle(gaugeOptionsi, layout, neutral);
+                    angles.a2 = calculateAngle(gaugeOptionsi, layout, data);
+                }
+            } else {
+                angles.a1 = gaugeOptionsi.gauge.startAngle;
+                angles.a2 = calculateAngle(gaugeOptionsi, layout, data);
+            }
+            
+            return angles;
+        }
+
+        /**
+         * Draw zero marker for Gauge with negative values
+         * 
+         * @method drawZeroMarker
+         * @param  {Object} gaugeOptionsi the options of the gauge
+         * @param  {Object} layout the layout properties
+         * @param  {Object} cellLayout the cell layout properties
+         * @param  {String} color line color
+         */
+        function drawZeroMarker(gaugeOptionsi, layout, cellLayout, color) {
+            var diff = (gaugeOptionsi.gauge.max - gaugeOptionsi.gauge.min) / 600;
+
+            drawArc(context,
+                cellLayout.cx,
+                cellLayout.cy,
+                layout.radius - 2,
+                layout.width - 4,
+                toRad(calculateAngle(gaugeOptionsi, layout, gaugeOptionsi.gauge.neutralValue-diff)),
+                toRad(calculateAngle(gaugeOptionsi, layout, gaugeOptionsi.gauge.neutralValue+diff)),
+                color,
+                2,
+                gaugeOptionsi.gauge.background.color);
         }
 
         /**
@@ -482,7 +537,7 @@
             drawText(
                 cellLayout.cx,
                 cellLayout.y + cellLayout.cellMargin + layout.labelMargin + cellLayout.offsetY,
-                "flotGagueLabel" + i,
+                "flotGaugeLabel" + i,
                 gaugeOptionsi.label.formatter ? gaugeOptionsi.label.formatter(item.label, item.data[0][1]) : text,
                 gaugeOptionsi.label);
         }
@@ -502,7 +557,7 @@
             drawText(
                 cellLayout.cx,
                 cellLayout.cy - (gaugeOptionsi.value.font.size / 2),
-                "flotGagueValue" + i,
+                "flotGaugeValue" + i,
                 gaugeOptionsi.value.formatter ? gaugeOptionsi.value.formatter(item.label, item.data[0][1]) : text,
                 gaugeOptionsi.value);
         }
@@ -529,6 +584,13 @@
                     drawThresholdValue(gaugeOptionsi, layout, cellLayout, i + "_" + j, threshold.value, a);
                 }
             }
+            
+            var neutral = gaugeOptionsi.gauge.neutralValue;
+            if (neutral != null && 
+                neutral>gaugeOptionsi.gauge.min && 
+                neutral<gaugeOptionsi.gauge.max) {
+                drawThresholdValue(gaugeOptionsi, layout, cellLayout, "Neutral" + i, neutral, calculateAngle(gaugeOptionsi, layout, neutral));
+            }
         }
 
         /**
@@ -550,7 +612,7 @@
                 cellLayout.cy
                     + ((layout.thresholdLabelMargin + (layout.thresholdLabelFontSize / 2) + layout.radius)
                         * Math.sin(toRad(a))),
-                "flotGagueThresholdValue" + i,
+                "flotGaugeThresholdValue" + i,
                 gaugeOptionsi.threshold.label.formatter ? gaugeOptionsi.threshold.label.formatter(value) : value,
                 gaugeOptionsi.threshold.label,
                 a);
@@ -594,6 +656,8 @@
 
             span.css("position", "absolute");
             span.css("top", y + "px");
+            span.css("white-space", "nowrap");
+
             if (textOptions.font.size) {
               span.css("font-size", textOptions.font.size + "px");
             }
@@ -935,16 +999,7 @@
                         }
                     },
                     values: [
-                        {
-                            value: 50,
-                            color: "lightgreen"
-                        }, {
-                            value: 80,
-                            color: "yellow"
-                        }, {
-                            value: 100,
-                            color: "red"
-                        }
+
                     ]
                 }
             }
@@ -960,3 +1015,4 @@
     });
 
 })(jQuery);
+

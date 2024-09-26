@@ -1,32 +1,95 @@
-import { Invitee, OrgUser, UsersState } from 'app/types';
-import { Action, ActionTypes } from './actions';
+import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
 import config from 'app/core/config';
+import { OrgUser, UsersState } from 'app/types';
 
 export const initialState: UsersState = {
-  invitees: [] as Invitee[],
-  users: [] as OrgUser[],
+  users: [],
   searchQuery: '',
-  canInvite: !config.disableLoginForm && !config.externalUserMngLinkName,
+  page: 0,
+  perPage: 30,
+  totalPages: 1,
   externalUserMngInfo: config.externalUserMngInfo,
   externalUserMngLinkName: config.externalUserMngLinkName,
   externalUserMngLinkUrl: config.externalUserMngLinkUrl,
-  hasFetched: false,
+  isLoading: false,
+  rolesLoading: false,
 };
 
-export const usersReducer = (state = initialState, action: Action): UsersState => {
-  switch (action.type) {
-    case ActionTypes.LoadUsers:
-      return { ...state, hasFetched: true, users: action.payload };
+export interface UsersFetchResult {
+  orgUsers: OrgUser[];
+  perPage: number;
+  page: number;
+  totalCount: number;
+}
 
-    case ActionTypes.LoadInvitees:
-      return { ...state, hasFetched: true, invitees: action.payload };
+export interface UsersRolesFetchResult {
+  orgUsers: OrgUser[];
+  perPage: number;
+  page: number;
+  totalCount: number;
+}
 
-    case ActionTypes.SetUsersSearchQuery:
-      return { ...state, searchQuery: action.payload };
-  }
+const usersSlice = createSlice({
+  name: 'users',
+  initialState,
+  reducers: {
+    usersLoaded: (state, action: PayloadAction<UsersFetchResult>): UsersState => {
+      const { totalCount, perPage, page, orgUsers } = action.payload;
+      const totalPages = Math.ceil(totalCount / perPage);
 
-  return state;
-};
+      return {
+        ...state,
+        isLoading: true,
+        users: orgUsers,
+        perPage,
+        page,
+        totalPages,
+      };
+    },
+    searchQueryChanged: (state, action: PayloadAction<string>): UsersState => {
+      // reset searchPage otherwise search results won't appear
+      return { ...state, searchQuery: action.payload, page: initialState.page };
+    },
+    setUsersSearchPage: (state, action: PayloadAction<number>): UsersState => {
+      return { ...state, page: action.payload };
+    },
+    pageChanged: (state, action: PayloadAction<number>) => ({
+      ...state,
+      page: action.payload,
+    }),
+    sortChanged: (state, action: PayloadAction<UsersState['sort']>) => ({
+      ...state,
+      sort: action.payload,
+    }),
+    usersFetchBegin: (state) => {
+      return { ...state, isLoading: true };
+    },
+    usersFetchEnd: (state) => {
+      return { ...state, isLoading: false };
+    },
+    rolesFetchBegin: (state) => {
+      return { ...state, rolesLoading: true };
+    },
+    rolesFetchEnd: (state) => {
+      return { ...state, rolesLoading: false };
+    },
+  },
+});
+
+export const {
+  searchQueryChanged,
+  setUsersSearchPage,
+  usersLoaded,
+  usersFetchBegin,
+  usersFetchEnd,
+  pageChanged,
+  sortChanged,
+  rolesFetchBegin,
+  rolesFetchEnd,
+} = usersSlice.actions;
+
+export const usersReducer = usersSlice.reducer;
 
 export default {
   users: usersReducer,

@@ -3,7 +3,8 @@ package migrations
 import (
 	"fmt"
 
-	"github.com/go-xorm/xorm"
+	"xorm.io/xorm"
+
 	. "github.com/grafana/grafana/pkg/services/sqlstore/migrator"
 	"github.com/grafana/grafana/pkg/util"
 )
@@ -116,13 +117,41 @@ func addUserMigrations(mg *Migrator) {
 
 	// Adds salt & rands for old users who used ldap or oauth
 	mg.AddMigration("Add missing user data", &AddMissingUserSaltAndRandsMigration{})
+
+	// is_disabled indicates whether user disabled or not. Disabled user should not be able to log in.
+	// This field used in couple with LDAP auth to disable users removed from LDAP rather than delete it immediately.
+	mg.AddMigration("Add is_disabled column to user", NewAddColumnMigration(userV2, &Column{
+		Name: "is_disabled", Type: DB_Bool, Nullable: false, Default: "0",
+	}))
+
+	mg.AddMigration("Add index user.login/user.email", NewAddIndexMigration(userV2, &Index{
+		Cols: []string{"login", "email"},
+	}))
+
+	//Service accounts are lightweight users with restricted permissions.  They support API keys
+	//and provisioning and tasks like alarms and reports.
+	// Issues in this migration: is_service_account should be nullable
+	mg.AddMigration("Add is_service_account column to user", NewAddColumnMigration(userV2, &Column{
+		Name: "is_service_account", Type: DB_Bool, Nullable: false, Default: "0",
+	}))
+
+	mg.AddMigration("Update is_service_account column to nullable",
+		NewRawSQLMigration("").
+			SQLite(migSQLITEisServiceAccountNullable).
+			Postgres("ALTER TABLE `user` ALTER COLUMN is_service_account DROP NOT NULL;").
+			Mysql("ALTER TABLE user MODIFY is_service_account BOOLEAN DEFAULT 0;"))
 }
+
+const migSQLITEisServiceAccountNullable = `ALTER TABLE user ADD COLUMN tmp_service_account BOOLEAN DEFAULT 0;
+UPDATE user SET tmp_service_account = is_service_account;
+ALTER TABLE user DROP COLUMN is_service_account;
+ALTER TABLE user RENAME COLUMN tmp_service_account TO is_service_account;`
 
 type AddMissingUserSaltAndRandsMigration struct {
 	MigrationBase
 }
 
-func (m *AddMissingUserSaltAndRandsMigration) Sql(dialect Dialect) string {
+func (m *AddMissingUserSaltAndRandsMigration) SQL(dialect Dialect) string {
 	return "code migration"
 }
 
@@ -140,8 +169,16 @@ func (m *AddMissingUserSaltAndRandsMigration) Exec(sess *xorm.Session, mg *Migra
 	}
 
 	for _, user := range users {
-		_, err := sess.Exec("UPDATE "+mg.Dialect.Quote("user")+" SET salt = ?, rands = ? WHERE id = ?", util.GetRandomString(10), util.GetRandomString(10), user.Id)
+		salt, err := util.GetRandomString(10)
 		if err != nil {
+			return err
+		}
+		rands, err := util.GetRandomString(10)
+		if err != nil {
+			return err
+		}
+		if _, err := sess.Exec("UPDATE "+mg.Dialect.Quote("user")+
+			" SET salt = ?, rands = ? WHERE id = ?", salt, rands, user.Id); err != nil {
 			return err
 		}
 	}

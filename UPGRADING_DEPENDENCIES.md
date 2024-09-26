@@ -1,29 +1,50 @@
-# Guide to Upgrading Dependencies
+# Guide to upgrading dependencies
 
 Upgrading Go or Node.js requires making changes in many different files. See below for a list and explanation for each.
 
 ## Go
 
-- CircleCi
+- Drone
 - `grafana/build-container`
 - Appveyor
 - Dockerfile
 
 ## Node.js
 
-- CircleCI
+- Drone
 - `grafana/build-container`
 - Appveyor
 - Dockerfile
+- `.github/workflows/publish.yml`
 
-## Go Dependencies
+## Go dependencies
 
-Updated using `dep`.
+The Grafana project uses [Go modules](https://golang.org/cmd/go/#hdr-Modules__module_versions__and_more) to manage dependencies on external packages. This requires a working Go environment with version 1.11 or greater installed.
 
-- `Gopkg.toml`
-- `Gopkg.lock`
+To add or update a new dependency, use the `go get` command:
 
-## Node.js Dependencies
+```bash
+go get example.com/some/module/pkg
+
+# Pick a specific version.
+go get example.com/some/module/pkg@vX.Y.Z
+```
+
+Tidy up the `go.mod` and `go.sum` files:
+
+```bash
+go mod tidy
+```
+
+You have to commit the changes to `go.mod` and `go.sum` before submitting the pull request.
+
+To understand what the actual dependencies of `grafana-server` are, one could run it with `-vv` flag. This might produce an output, different from `go.mod` contents and `-vv` option is the source of truth here. It lists the modules _compiled_ into the executable, while `go.mod` lists also test and weak transitive dependencies (modules, used in some package, which is not in use by itself). If you are interested in reporting a vulnerability in a dependency module - please consult `-vv` output, maybe the "dependency" is not a dependency as such.
+
+### Upgrading dependencies
+
+If you need to upgrade a direct or indirect dependency, you can do it like so, $MODULE being the dependency in question: `go get -u $MODULE`. The corresponding entry in go.mod should then have the version you specified; if it's an indirect dependency, the entry should have the `// indirect` comment. Follow this by executing `go mod tidy`, to ensure that go.mod and go.sum are up to date. If the indirect dependency turns out to not be used (transitively) by any of our packages, `go mod tidy` will actually strip it from go.mod. In that case, you can just ignore it since it isn't used in the end.
+
+## Node.js dependencies
 
 Updated using `yarn`.
 
@@ -31,9 +52,9 @@ Updated using `yarn`.
 
 ## Where to make changes
 
-### CircleCI
+### Drone
 
-Our builds run on CircleCI through our build script.
+Our CI builds run on Drone.
 
 #### Files
 
@@ -47,9 +68,9 @@ Our builds run on CircleCI through our build script.
 
 ### grafana/build-container
 
-The main build step (in CircleCI) is built using a custom build container that comes pre-baked with some of the necessary dependencies.
+The main build steps (in Drone) happen using a custom Docker image that comes pre-baked with some of the necessary dependencies.
 
-Link: [grafana-build-container](https://github.com/grafana/grafana-build-container)
+Link: [grafana/build-container](https://github.com/grafana/grafana/tree/main/scripts/build/ci-build)
 
 #### Dependencies
 
@@ -60,7 +81,7 @@ Link: [grafana-build-container](https://github.com/grafana/grafana-build-contain
 
 ### Appveyor
 
-Master and release builds trigger test runs on Appveyors build environment so that tests will run on Windows.
+Main and release builds trigger test runs on Appveyors build environment so that tests will run on Windows.
 
 #### Files:
 

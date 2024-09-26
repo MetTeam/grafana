@@ -1,10 +1,12 @@
 'use strict';
 
-const MiniCssExtractPlugin = require("mini-css-extract-plugin");
+const MiniCssExtractPlugin = require('mini-css-extract-plugin');
+const path = require('path');
 
-module.exports = function(options) {
+module.exports = function (options) {
   return {
     test: /\.scss$/,
+    exclude: /node_modules/,
     use: [
       MiniCssExtractPlugin.loader,
       {
@@ -13,17 +15,23 @@ module.exports = function(options) {
           importLoaders: 2,
           url: options.preserveUrl,
           sourceMap: options.sourceMap,
-          minimize: options.minimize,
         },
       },
       {
         loader: 'postcss-loader',
         options: {
           sourceMap: options.sourceMap,
-          config: { path: __dirname + '/postcss.config.js' },
+          postcssOptions: {
+            config: path.resolve(__dirname),
+          },
         },
       },
-      { loader: 'sass-loader', options: { sourceMap: options.sourceMap } },
+      {
+        loader: 'sass-loader',
+        options: {
+          sourceMap: options.sourceMap,
+        },
+      },
     ],
   };
 };

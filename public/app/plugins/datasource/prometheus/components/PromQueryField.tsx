@@ -1,278 +1,288 @@
-import _ from 'lodash';
-import React from 'react';
-import Cascader from 'rc-cascader';
-import PluginPrism from 'slate-prism';
-import Prism from 'prismjs';
+import { cx } from '@emotion/css';
+import React, { ReactNode } from 'react';
 
-import { TypeaheadOutput } from 'app/types/explore';
+import { isDataFrame, QueryEditorProps, QueryHint, TimeRange, toLegacyResponseData } from '@grafana/data';
+import { reportInteraction } from '@grafana/runtime';
+import { Icon, Themeable2, withTheme2, clearButtonStyles } from '@grafana/ui';
+import { LocalStorageValueProvider } from 'app/core/components/LocalStorageValueProvider';
+import {
+  CancelablePromise,
+  isCancelablePromiseRejection,
+  makePromiseCancelable,
+} from 'app/core/utils/CancelablePromise';
 
-// dom also includes Element polyfills
-import { getNextCharacter, getPreviousCousin } from 'app/features/explore/utils/dom';
-import BracesPlugin from 'app/features/explore/slate-plugins/braces';
-import RunnerPlugin from 'app/features/explore/slate-plugins/runner';
-import QueryField, { TypeaheadInput, QueryFieldState } from 'app/features/explore/QueryField';
-import { DataQuery } from 'app/types';
+import { PrometheusDatasource } from '../datasource';
+import { roundMsToMin } from '../language_utils';
+import { PromOptions, PromQuery } from '../types';
 
-const HISTOGRAM_GROUP = '__histograms__';
-const METRIC_MARK = 'metric';
-const PRISM_SYNTAX = 'promql';
-export const RECORDING_RULES_GROUP = '__recording_rules__';
+import { PrometheusMetricsBrowser } from './PrometheusMetricsBrowser';
+import { MonacoQueryFieldWrapper } from './monaco-query-field/MonacoQueryFieldWrapper';
 
-export function groupMetricsByPrefix(metrics: string[], delimiter = '_'): CascaderOption[] {
-  // Filter out recording rules and insert as first option
-  const ruleRegex = /:\w+:/;
-  const ruleNames = metrics.filter(metric => ruleRegex.test(metric));
-  const rulesOption = {
-    label: 'Recording rules',
-    value: RECORDING_RULES_GROUP,
-    children: ruleNames
-      .slice()
-      .sort()
-      .map(name => ({ label: name, value: name })),
-  };
+const LAST_USED_LABELS_KEY = 'grafana.datasources.prometheus.browser.labels';
 
-  const options = ruleNames.length > 0 ? [rulesOption] : [];
-
-  const metricsOptions = _.chain(metrics)
-    .filter(metric => !ruleRegex.test(metric))
-    .groupBy(metric => metric.split(delimiter)[0])
-    .map((metricsForPrefix: string[], prefix: string): CascaderOption => {
-      const prefixIsMetric = metricsForPrefix.length === 1 && metricsForPrefix[0] === prefix;
-      const children = prefixIsMetric ? [] : metricsForPrefix.sort().map(m => ({ label: m, value: m }));
-      return {
-        children,
-        label: prefix,
-        value: prefix,
-      };
-    })
-    .sortBy('label')
-    .value();
-
-  return [...options, ...metricsOptions];
-}
-
-export function willApplySuggestion(suggestion: string, { typeaheadContext, typeaheadText }: QueryFieldState): string {
-  // Modify suggestion based on context
-  switch (typeaheadContext) {
-    case 'context-labels': {
-      const nextChar = getNextCharacter();
-      if (!nextChar || nextChar === '}' || nextChar === ',') {
-        suggestion += '=';
-      }
-      break;
-    }
-
-    case 'context-label-values': {
-      // Always add quotes and remove existing ones instead
-      if (!typeaheadText.match(/^(!?=~?"|")/)) {
-        suggestion = `"${suggestion}`;
-      }
-      if (getNextCharacter() !== '"') {
-        suggestion = `${suggestion}"`;
-      }
-      break;
-    }
-
-    default:
+function getChooserText(metricsLookupDisabled: boolean, hasSyntax: boolean, hasMetrics: boolean) {
+  if (metricsLookupDisabled) {
+    return '(Disabled)';
   }
-  return suggestion;
+
+  if (!hasSyntax) {
+    return 'Loading metrics...';
+  }
+
+  if (!hasMetrics) {
+    return '(No metrics found)';
+  }
+
+  return 'Metrics browser';
 }
 
-interface CascaderOption {
-  label: string;
-  value: string;
-  children?: CascaderOption[];
-  disabled?: boolean;
-}
-
-interface PromQueryFieldProps {
-  datasource: any;
-  error?: string | JSX.Element;
-  initialQuery: DataQuery;
-  hint?: any;
-  history?: any[];
-  metricsByPrefix?: CascaderOption[];
-  onClickHintFix?: (action: any) => void;
-  onPressEnter?: () => void;
-  onQueryChange?: (value: DataQuery, override?: boolean) => void;
+interface PromQueryFieldProps extends QueryEditorProps<PrometheusDatasource, PromQuery, PromOptions>, Themeable2 {
+  ExtraFieldElement?: ReactNode;
+  'data-testid'?: string;
 }
 
 interface PromQueryFieldState {
-  metricsOptions: any[];
-  metricsByPrefix: CascaderOption[];
+  labelBrowserVisible: boolean;
   syntaxLoaded: boolean;
+  hint: QueryHint | null;
 }
 
 class PromQueryField extends React.PureComponent<PromQueryFieldProps, PromQueryFieldState> {
-  plugins: any[];
-  languageProvider: any;
+  declare languageProviderInitializationPromise: CancelablePromise<any>;
 
-  constructor(props: PromQueryFieldProps, context) {
-    super(props, context);
-
-    if (props.datasource.languageProvider) {
-      this.languageProvider = props.datasource.languageProvider;
-    }
-
-    this.plugins = [
-      BracesPlugin(),
-      RunnerPlugin({ handler: props.onPressEnter }),
-      PluginPrism({
-        onlyIn: node => node.type === 'code_block',
-        getSyntax: node => 'promql',
-      }),
-    ];
+  constructor(props: PromQueryFieldProps) {
+    super(props);
 
     this.state = {
-      metricsByPrefix: [],
-      metricsOptions: [],
+      labelBrowserVisible: false,
       syntaxLoaded: false,
+      hint: null,
     };
   }
 
   componentDidMount() {
-    if (this.languageProvider) {
-      this.languageProvider
-        .start()
-        .then(remaining => {
-          remaining.map(task => task.then(this.onUpdateLanguage).catch(() => {}));
-        })
-        .then(() => this.onUpdateLanguage());
+    if (this.props.datasource.languageProvider) {
+      this.refreshMetrics();
+    }
+    this.refreshHint();
+  }
+
+  componentWillUnmount() {
+    if (this.languageProviderInitializationPromise) {
+      this.languageProviderInitializationPromise.cancel();
     }
   }
 
-  onChangeMetrics = (values: string[], selectedOptions: CascaderOption[]) => {
-    let query;
-    if (selectedOptions.length === 1) {
-      if (selectedOptions[0].children.length === 0) {
-        query = selectedOptions[0].value;
+  componentDidUpdate(prevProps: PromQueryFieldProps) {
+    const {
+      data,
+      datasource: { languageProvider },
+      range,
+    } = this.props;
+
+    if (languageProvider !== prevProps.datasource.languageProvider) {
+      // We reset this only on DS change so we do not flesh loading state on every rangeChange which happens on every
+      // query run if using relative range.
+      this.setState({
+        syntaxLoaded: false,
+      });
+    }
+
+    const changedRangeToRefresh = this.rangeChangedToRefresh(range, prevProps.range);
+    // We want to refresh metrics when language provider changes and/or when range changes (we round up intervals to a minute)
+    if (languageProvider !== prevProps.datasource.languageProvider || changedRangeToRefresh) {
+      this.refreshMetrics();
+    }
+
+    if (data && prevProps.data && prevProps.data.series !== data.series) {
+      this.refreshHint();
+    }
+  }
+
+  refreshHint = () => {
+    const { datasource, query, data } = this.props;
+    const initHints = datasource.getInitHints();
+    const initHint = initHints.length > 0 ? initHints[0] : null;
+
+    if (!data || data.series.length === 0) {
+      this.setState({
+        hint: initHint,
+      });
+      return;
+    }
+
+    const result = isDataFrame(data.series[0]) ? data.series.map(toLegacyResponseData) : data.series;
+    const queryHints = datasource.getQueryHints(query, result);
+    let queryHint = queryHints.length > 0 ? queryHints[0] : null;
+
+    this.setState({ hint: queryHint ?? initHint });
+  };
+
+  refreshMetrics = async () => {
+    const {
+      range,
+      datasource: { languageProvider },
+    } = this.props;
+
+    this.languageProviderInitializationPromise = makePromiseCancelable(languageProvider.start(range));
+
+    try {
+      const remainingTasks = await this.languageProviderInitializationPromise.promise;
+      await Promise.all(remainingTasks);
+      this.onUpdateLanguage();
+    } catch (err) {
+      if (isCancelablePromiseRejection(err) && err.isCanceled) {
+        // do nothing, promise was canceled
       } else {
-        // Ignore click on group
-        return;
-      }
-    } else {
-      const prefix = selectedOptions[0].value;
-      const metric = selectedOptions[1].value;
-      if (prefix === HISTOGRAM_GROUP) {
-        query = `histogram_quantile(0.95, sum(rate(${metric}[5m])) by (le))`;
-      } else {
-        query = metric;
+        throw err;
       }
     }
-    this.onChangeQuery(query, true);
+  };
+
+  rangeChangedToRefresh(range?: TimeRange, prevRange?: TimeRange): boolean {
+    if (range && prevRange) {
+      const sameMinuteFrom = roundMsToMin(range.from.valueOf()) === roundMsToMin(prevRange.from.valueOf());
+      const sameMinuteTo = roundMsToMin(range.to.valueOf()) === roundMsToMin(prevRange.to.valueOf());
+      // If both are same, don't need to refresh.
+      return !(sameMinuteFrom && sameMinuteTo);
+    }
+    return false;
+  }
+
+  /**
+   * TODO #33976: Remove this, add histogram group (query = `histogram_quantile(0.95, sum(rate(${metric}[5m])) by (le))`;)
+   */
+  onChangeLabelBrowser = (selector: string) => {
+    this.onChangeQuery(selector, true);
+    this.setState({ labelBrowserVisible: false });
   };
 
   onChangeQuery = (value: string, override?: boolean) => {
     // Send text change to parent
-    const { initialQuery, onQueryChange } = this.props;
-    if (onQueryChange) {
-      const query: DataQuery = {
-        ...initialQuery,
-        expr: value,
-      };
-      onQueryChange(query, override);
+    const { query, onChange, onRunQuery } = this.props;
+    if (onChange) {
+      const nextQuery: PromQuery = { ...query, expr: value };
+      onChange(nextQuery);
+
+      if (override && onRunQuery) {
+        onRunQuery();
+      }
     }
+  };
+
+  onClickChooserButton = () => {
+    this.setState((state) => ({ labelBrowserVisible: !state.labelBrowserVisible }));
+
+    reportInteraction('user_grafana_prometheus_metrics_browser_clicked', {
+      editorMode: this.state.labelBrowserVisible ? 'metricViewClosed' : 'metricViewOpen',
+      app: this.props?.app ?? '',
+    });
   };
 
   onClickHintFix = () => {
-    const { hint, onClickHintFix } = this.props;
-    if (onClickHintFix && hint && hint.fix) {
-      onClickHintFix(hint.fix.action);
+    const { datasource, query, onChange, onRunQuery } = this.props;
+    const { hint } = this.state;
+    if (hint?.fix?.action) {
+      onChange(datasource.modifyQuery(query, hint.fix.action));
     }
+    onRunQuery();
   };
 
   onUpdateLanguage = () => {
-    const { histogramMetrics, metrics } = this.languageProvider;
+    const {
+      datasource: { languageProvider },
+    } = this.props;
+    const { metrics } = languageProvider;
+
     if (!metrics) {
       return;
     }
 
-    Prism.languages[PRISM_SYNTAX] = this.languageProvider.getSyntax();
-    Prism.languages[PRISM_SYNTAX][METRIC_MARK] = {
-      alias: 'variable',
-      pattern: new RegExp(`(?:^|\\s)(${metrics.join('|')})(?:$|\\s)`),
-    };
-
-    // Build metrics tree
-    const metricsByPrefix = groupMetricsByPrefix(metrics);
-    const histogramOptions = histogramMetrics.map(hm => ({ label: hm, value: hm }));
-    const metricsOptions =
-      histogramMetrics.length > 0
-        ? [
-            { label: 'Histograms', value: HISTOGRAM_GROUP, children: histogramOptions, isLeaf: false },
-            ...metricsByPrefix,
-          ]
-        : metricsByPrefix;
-
-    this.setState({ metricsOptions, syntaxLoaded: true });
-  };
-
-  onTypeahead = (typeahead: TypeaheadInput): TypeaheadOutput => {
-    if (!this.languageProvider) {
-      return { suggestions: [] };
-    }
-
-    const { history } = this.props;
-    const { prefix, text, value, wrapperNode } = typeahead;
-
-    // Get DOM-dependent context
-    const wrapperClasses = Array.from(wrapperNode.classList);
-    const labelKeyNode = getPreviousCousin(wrapperNode, '.attr-name');
-    const labelKey = labelKeyNode && labelKeyNode.textContent;
-    const nextChar = getNextCharacter();
-
-    const result = this.languageProvider.provideCompletionItems(
-      { text, value, prefix, wrapperClasses, labelKey },
-      { history }
-    );
-
-    console.log('handleTypeahead', wrapperClasses, text, prefix, nextChar, labelKey, result.context);
-
-    return result;
+    this.setState({ syntaxLoaded: true });
   };
 
   render() {
-    const { error, hint, initialQuery } = this.props;
-    const { metricsOptions, syntaxLoaded } = this.state;
-    const cleanText = this.languageProvider ? this.languageProvider.cleanText : undefined;
-    const chooserText = syntaxLoaded ? 'Metrics' : 'Loading metrics...';
+    const {
+      datasource,
+      datasource: { languageProvider },
+      query,
+      ExtraFieldElement,
+      history = [],
+      theme,
+    } = this.props;
+
+    const { labelBrowserVisible, syntaxLoaded, hint } = this.state;
+    const hasMetrics = languageProvider.metrics.length > 0;
+    const chooserText = getChooserText(datasource.lookupsDisabled, syntaxLoaded, hasMetrics);
+    const buttonDisabled = !(syntaxLoaded && hasMetrics);
 
     return (
-      <div className="prom-query-field">
-        <div className="prom-query-field-tools">
-          <Cascader options={metricsOptions} onChange={this.onChangeMetrics}>
-            <button className="btn navbar-button navbar-button--tight" disabled={!syntaxLoaded}>
-              {chooserText}
-            </button>
-          </Cascader>
-        </div>
-        <div className="prom-query-field-wrapper">
-          <QueryField
-            additionalPlugins={this.plugins}
-            cleanText={cleanText}
-            initialQuery={initialQuery.expr}
-            onTypeahead={this.onTypeahead}
-            onWillApplySuggestion={willApplySuggestion}
-            onValueChanged={this.onChangeQuery}
-            placeholder="Enter a PromQL query"
-            portalOrigin="prometheus"
-            syntaxLoaded={syntaxLoaded}
-          />
-          {error ? <div className="prom-query-field-info text-error">{error}</div> : null}
-          {hint ? (
-            <div className="prom-query-field-info text-warning">
-              {hint.label}{' '}
-              {hint.fix ? (
-                <a className="text-link muted" onClick={this.onClickHintFix}>
-                  {hint.fix.label}
-                </a>
+      <LocalStorageValueProvider<string[]> storageKey={LAST_USED_LABELS_KEY} defaultValue={[]}>
+        {(lastUsedLabels, onLastUsedLabelsSave, onLastUsedLabelsDelete) => {
+          return (
+            <>
+              <div
+                className="gf-form-inline gf-form-inline--xs-view-flex-column flex-grow-1"
+                data-testid={this.props['data-testid']}
+              >
+                <button
+                  className="gf-form-label query-keyword pointer"
+                  onClick={this.onClickChooserButton}
+                  disabled={buttonDisabled}
+                  type="button"
+                >
+                  {chooserText}
+                  <Icon name={labelBrowserVisible ? 'angle-down' : 'angle-right'} />
+                </button>
+
+                <div className="gf-form gf-form--grow flex-shrink-1 min-width-15">
+                  <MonacoQueryFieldWrapper
+                    languageProvider={languageProvider}
+                    history={history}
+                    onChange={this.onChangeQuery}
+                    onRunQuery={this.props.onRunQuery}
+                    initialValue={query.expr ?? ''}
+                    placeholder="Enter a PromQL query…"
+                    datasource={datasource}
+                  />
+                </div>
+              </div>
+              {labelBrowserVisible && (
+                <div className="gf-form">
+                  <PrometheusMetricsBrowser
+                    languageProvider={languageProvider}
+                    onChange={this.onChangeLabelBrowser}
+                    lastUsedLabels={lastUsedLabels || []}
+                    storeLastUsedLabels={onLastUsedLabelsSave}
+                    deleteLastUsedLabels={onLastUsedLabelsDelete}
+                    timeRange={this.props.range}
+                  />
+                </div>
+              )}
+
+              {ExtraFieldElement}
+              {hint ? (
+                <div className="query-row-break">
+                  <div className="prom-query-field-info text-warning">
+                    {hint.label}{' '}
+                    {hint.fix ? (
+                      <button
+                        type="button"
+                        className={cx(clearButtonStyles(theme), 'text-link', 'muted')}
+                        onClick={this.onClickHintFix}
+                      >
+                        {hint.fix.label}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
               ) : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
+            </>
+          );
+        }}
+      </LocalStorageValueProvider>
     );
   }
 }
 
-export default PromQueryField;
+export default withTheme2(PromQueryField);
